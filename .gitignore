@@ -1,0 +1,49 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Runtime configuration and credentials
+config.json
+config.*.json
+!config.example.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials*
+secrets.*
+auth.json
+models.json
+
+# Runtime state, transcripts, logs, and downloaded files
+.pi-subagents/
+sessions/
+inbox/
+outbox/
+state.json
+state.json.tmp
+audit.jsonl
+*.jsonl
+*.log
+*.pid
+
+# Local backups and temporary files
+*.bak
+*.bak.*
+*.backup
+*.old
+*.orig
+*.swp
+*~
+.DS_Store
+
+# IDE files
+.idea/
+.vscode/

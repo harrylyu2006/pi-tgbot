@@ -1,0 +1,25 @@
+import { redactOutbound } from "../src/telegram/redact.ts";
+let fail = 0;
+const must = (name: string, input: string, shouldRedact: boolean) => {
+  const { text } = redactOutbound(input);
+  const changed = text !== input;
+  const ok = changed === shouldRedact;
+  if (!ok) fail++;
+  console.log(`  ${ok ? "✓" : "✗"} ${name}${ok ? "" : ` -> ${JSON.stringify(text.slice(0,90))}`}`);
+};
+console.log("必须抹掉：");
+must("bot token", "token 是 1234567890:AAFAKEfaketokenfortestingonly1234567", true);
+must("中转 key", "用 sk-FAKEKEYFORTESTINGONLY123456 连上去的", true);
+must("VPS 密码行", "password: Xk9#mQ2vLp8w", true);
+must("密码行(等号)", "passwd=SuperSecret123", true);
+must("github token", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", true);
+must("私钥块", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", true);
+must("数据库 URL", "postgres://user:hunter2@db.example.com/x", true);
+console.log("不能误伤：");
+must("中文散文", "密码我记在上面那张表里了，没问题", false);
+must("password 后接中文", "password: 见上表", false);
+must("普通 IP 报告", "德国 xTom: 192.0.2.55 在线", false);
+must("代码里的变量名", "const password = getPassword();", false);
+must("短 token 词", "token 用完了", false);
+console.log(fail === 0 ? "\n出站脱敏验证通过" : `\n${fail} 处不符`);
+process.exit(fail === 0 ? 0 : 1);

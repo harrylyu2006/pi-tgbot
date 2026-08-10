@@ -1,0 +1,39 @@
+[Unit]
+Description=pi-tg — headless Telegram daemon for the pi coding agent
+Documentation=https://github.com/harrylyu2006/pi-tgbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=pi-tg
+Group=pi-tg
+WorkingDirectory=/opt/pi-tg
+ExecStart=/usr/bin/env node src/main.ts /etc/pi-tg/config.json
+
+# Change HOME if your pi agent directory lives elsewhere. The service user must
+# be able to read its provider credentials and write the configured session dir.
+Environment=HOME=/var/lib/pi-tg
+Environment=NODE_OPTIONS=--max-old-space-size=768
+
+# A daemon that exits unexpectedly should come back. Exit 78 means the config
+# or Telegram token is invalid, so restarting would only create an auth loop.
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+
+# Leave enough time to abort the active agent turn and seal its Telegram message.
+KillSignal=SIGTERM
+TimeoutStopSec=25
+
+# Secrets are supplied by config.json, not by world-readable command output.
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+MemoryMax=1500M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-tg
+
+[Install]
+WantedBy=multi-user.target

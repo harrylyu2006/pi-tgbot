@@ -1,0 +1,37 @@
+{
+  "botToken": "REPLACE_WITH_BOTFATHER_TOKEN",
+  "allowedUserId": 123456789,
+  "cwd": "/srv/pi-tg/workspace",
+  "agentDir": "/var/lib/pi-tg/agent",
+  "sessionDir": "/var/lib/pi-tg/sessions",
+  "statePath": "/var/lib/pi-tg/state.json",
+  "auditPath": "/var/log/pi-tg/audit.jsonl",
+  "logLevel": "info",
+  "render": {
+    "editThrottleMs": 2500,
+    "maxChars": 3800,
+    "maxEditsPerTurn": 120,
+    "notifyAfterMs": 30000
+  },
+  "tools": {
+    "deny": [],
+    "extraActive": ["grep", "find", "ls"]
+  },
+  "turn": {
+    "wallClockMs": 1200000
+  },
+  "coldStart": {
+    "staleSeconds": 900
+  },
+  "files": {
+    "inboxDir": "/var/lib/pi-tg/inbox",
+    "outboxRoots": ["/srv/pi-tg/workspace", "/tmp/pi-tg"],
+    "maxDownloadMb": 20,
+    "maxUploadMb": 50,
+    "retentionDays": 14
+  },
+  "extensions": [
+    "./extensions/security.ts",
+    "./extensions/fanout-guard.ts"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "pi-tgbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Security-conscious single-operator Telegram daemon for the pi coding agent SDK",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harrylyu2006/pi-tgbot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/harrylyu2006/pi-tgbot/issues"
+  },
+  "homepage": "https://github.com/harrylyu2006/pi-tgbot#readme",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "probe": "node scripts/probe.ts",
+    "check": "tsc --noEmit",
+    "test": "npm run check && npm run test:render && npm run test:redact && npm run test:ui && npm run test:fanout && npm run publication-check",
+    "test:render": "node scripts/render-check.ts",
+    "test:redact": "node scripts/redact-check.ts",
+    "test:ui": "node scripts/ui-failclosed.ts",
+    "test:fanout": "node scripts/fanout-check.mjs",
+    "publication-check": "node scripts/publication-check.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "typebox": "1.3.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^24.0.0"
+  }
+}
