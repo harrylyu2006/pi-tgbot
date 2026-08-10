@@ -131,6 +131,15 @@ export class TelegramApi {
 	}
 
 	/**
+	 * Delete the command list for a scope/language. With no scope this clears the
+	 * default menu; a previous bot under the same token may have left stale
+	 * per-scope or per-language commands that `setMyCommands` alone does not erase.
+	 */
+	deleteMyCommands(params?: { scope?: unknown; language_code?: string }, signal?: AbortSignal): Promise<boolean> {
+		return this.call<boolean>("deleteMyCommands", params ?? {}, { signal, timeoutMs: 15_000 });
+	}
+
+	/**
 	 * Long poll.
 	 *
 	 * `connection: close` is deliberate. A kept-alive socket that Telegram has

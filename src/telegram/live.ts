@@ -111,7 +111,9 @@ export class LiveMessage {
 
 	setActivity(text: string): void {
 		if (this.closed) return;
-		this.activity = text;
+		// Activity can contain the exact bash command or tool arguments. Apply the
+		// same outbound scrubber used for model answers before it reaches Telegram.
+		this.activity = redactOutbound(text).text;
 		this.schedule();
 	}
 

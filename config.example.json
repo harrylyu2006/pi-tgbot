@@ -18,7 +18,7 @@
     "extraActive": ["grep", "find", "ls"]
   },
   "turn": {
-    "wallClockMs": 1200000
+    "idleTimeoutMs": 1200000
   },
   "coldStart": {
     "staleSeconds": 900

@@ -31,9 +31,16 @@ export interface InterruptedTurn {
 	startedAt: number;
 }
 
+/** Operator choices that must survive both process restarts and `/new`. */
+export interface AgentPreferences {
+	model?: string;
+	thinkingLevel?: string;
+}
+
 interface Persisted {
 	seen: number[];
 	interrupted?: InterruptedTurn | null;
+	agentPreferences?: AgentPreferences;
 }
 
 export class State {
@@ -42,6 +49,7 @@ export class State {
 	private seen: number[] = [];
 	private seenSet = new Set<number>();
 	private interruptedValue: InterruptedTurn | null = null;
+	private agentPreferencesValue: AgentPreferences = {};
 
 	constructor(path: string, log: Logger) {
 		this.path = path;
@@ -54,7 +62,17 @@ export class State {
 			this.seen = Array.isArray(raw.seen) ? raw.seen.filter((n) => typeof n === "number").slice(-MAX_SEEN) : [];
 			this.seenSet = new Set(this.seen);
 			this.interruptedValue = raw.interrupted ?? null;
-			this.log.info({ msg: "state loaded", seen: this.seen.length, interrupted: Boolean(this.interruptedValue) });
+			const saved = raw.agentPreferences;
+			this.agentPreferencesValue = {
+				...(typeof saved?.model === "string" && saved.model.includes("/") ? { model: saved.model } : {}),
+				...(typeof saved?.thinkingLevel === "string" && saved.thinkingLevel ? { thinkingLevel: saved.thinkingLevel } : {}),
+			};
+			this.log.info({
+				msg: "state loaded",
+				seen: this.seen.length,
+				interrupted: Boolean(this.interruptedValue),
+				agentPreferences: this.agentPreferencesValue,
+			});
 		} catch {
 			// A missing or corrupt file is a first boot, not an error worth dying
 			// over — the cost is at most one duplicate answer.
@@ -63,7 +81,11 @@ export class State {
 	}
 
 	private persist(): void {
-		const payload: Persisted = { seen: this.seen, interrupted: this.interruptedValue };
+		const payload: Persisted = {
+			seen: this.seen,
+			interrupted: this.interruptedValue,
+			agentPreferences: this.agentPreferencesValue,
+		};
 		try {
 			mkdirSync(dirname(this.path), { recursive: true });
 			const tmp = `${this.path}.tmp`;
@@ -91,6 +113,23 @@ export class State {
 
 	get interrupted(): InterruptedTurn | null {
 		return this.interruptedValue;
+	}
+
+	get agentPreferences(): Readonly<AgentPreferences> {
+		return { ...this.agentPreferencesValue };
+	}
+
+	/** Persist only supplied fields, preserving the other operator choices. */
+	setAgentPreferences(patch: AgentPreferences): void {
+		const next = { ...this.agentPreferencesValue, ...patch };
+		if (
+			next.model === this.agentPreferencesValue.model &&
+			next.thinkingLevel === this.agentPreferencesValue.thinkingLevel
+		) {
+			return;
+		}
+		this.agentPreferencesValue = next;
+		this.persist();
 	}
 
 	beginTurn(turn: InterruptedTurn): void {

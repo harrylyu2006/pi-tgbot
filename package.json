@@ -20,11 +20,16 @@
     "start": "node src/main.ts",
     "probe": "node scripts/probe.ts",
     "check": "tsc --noEmit",
-    "test": "npm run check && npm run test:render && npm run test:redact && npm run test:ui && npm run test:fanout && npm run publication-check",
+    "test": "npm run check && npm run test:render && npm run test:redact && npm run test:ui && npm run test:fanout && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:idle-watchdog && npm run test:panel && npm run publication-check",
     "test:render": "node scripts/render-check.ts",
     "test:redact": "node scripts/redact-check.ts",
     "test:ui": "node scripts/ui-failclosed.ts",
     "test:fanout": "node scripts/fanout-check.mjs",
+    "test:activity": "node scripts/activity-check.ts",
+    "test:reasoning": "node scripts/reasoning-check.ts",
+    "test:state": "node scripts/state-check.ts",
+    "test:idle-watchdog": "node scripts/idle-watchdog-check.ts",
+    "test:panel": "node scripts/panel-check.ts",
     "publication-check": "node scripts/publication-check.mjs"
   },
   "dependencies": {

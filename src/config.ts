@@ -43,8 +43,8 @@ export interface Config {
 		extraActive: string[];
 	};
 	turn: {
-		/** Wall-clock ceiling for one turn before we force an abort. */
-		wallClockMs: number;
+		/** Abort only after this long with no request or agent progress event. */
+		idleTimeoutMs: number;
 	};
 	/** Durable state (seen update ids, interrupted-turn marker). */
 	statePath: string;
@@ -86,7 +86,7 @@ const DEFAULTS = {
 	logLevel: "info" as Level,
 	render: { editThrottleMs: 2500, maxChars: 3800, maxEditsPerTurn: 120, notifyAfterMs: 30_000 },
 	tools: { deny: [] as string[], extraActive: ["grep", "find", "ls"] },
-	turn: { wallClockMs: 20 * 60 * 1000 },
+	turn: { idleTimeoutMs: 20 * 60 * 1000 },
 	statePath: "/var/lib/pi-tg/state.json",
 	auditPath: "/var/log/pi-tg/audit.jsonl",
 	extensions: [] as string[],
@@ -155,7 +155,7 @@ export function loadConfig(path: string): Config {
 	const toolsRaw = (o.tools ?? {}) as Record<string, unknown>;
 	requireKeys(toolsRaw, ["deny", "extraActive"], "tools.");
 	const turnRaw = (o.turn ?? {}) as Record<string, unknown>;
-	requireKeys(turnRaw, ["wallClockMs"], "turn.");
+	requireKeys(turnRaw, ["idleTimeoutMs"], "turn.");
 
 	const cfg: Config = {
 		botToken: o.botToken,
@@ -174,7 +174,7 @@ export function loadConfig(path: string): Config {
 			deny: strArray(toolsRaw.deny, DEFAULTS.tools.deny, "tools.deny"),
 			extraActive: strArray(toolsRaw.extraActive, DEFAULTS.tools.extraActive, "tools.extraActive"),
 		},
-		turn: { wallClockMs: num(turnRaw.wallClockMs, DEFAULTS.turn.wallClockMs, "turn.wallClockMs") },
+		turn: { idleTimeoutMs: num(turnRaw.idleTimeoutMs, DEFAULTS.turn.idleTimeoutMs, "turn.idleTimeoutMs") },
 		statePath: typeof o.statePath === "string" ? o.statePath : DEFAULTS.statePath,
 		auditPath: typeof o.auditPath === "string" ? o.auditPath : DEFAULTS.auditPath,
 		extensions: strArray(o.extensions, DEFAULTS.extensions, "extensions"),
@@ -198,7 +198,7 @@ export function loadConfig(path: string): Config {
 
 	if (o.model !== undefined) {
 		if (typeof o.model !== "string" || !o.model.includes("/")) {
-			throw new ConfigError('model must be "provider/model-id", e.g. "ai-nube/GLM-5.2"');
+			throw new ConfigError('model must be "provider/model-id", e.g. "openai/gpt-5.6"');
 		}
 		cfg.model = o.model;
 	}
@@ -206,6 +206,7 @@ export function loadConfig(path: string): Config {
 	if (!["debug", "info", "warn", "error"].includes(cfg.logLevel)) throw new ConfigError(`bad logLevel ${cfg.logLevel}`);
 	if (cfg.render.maxChars > 4000) throw new ConfigError("render.maxChars must stay below the 4096 Telegram limit");
 	if (cfg.render.editThrottleMs < 1000) throw new ConfigError("render.editThrottleMs below 1000 will hit per-chat rate limits");
+	if (cfg.turn.idleTimeoutMs < 60_000) throw new ConfigError("turn.idleTimeoutMs must be at least 60000");
 	if (cfg.sessionDir.startsWith(`${cfg.agentDir}/sessions`)) {
 		throw new ConfigError("sessionDir must not live under the shared agent session dir — it would collide with interactive pi");
 	}

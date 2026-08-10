@@ -16,6 +16,8 @@
 import { mkdirSync } from "node:fs";
 import { errFields, type Logger } from "../log.ts";
 import type { Config } from "../config.ts";
+import type { AgentPreferences } from "../state.ts";
+import { availableLevelsFor, enrichThinkingLevels, type ModelLike } from "./reasoning.ts";
 
 // The SDK ships .d.ts that pull in its own module graph; typing it precisely
 // here would couple us to internals we deliberately do not depend on. The
@@ -48,6 +50,10 @@ export interface AgentHostDeps {
 	onEvent: (generation: number, event: any) => void;
 	onAbortRequested: () => void;
 	onShutdownRequested: () => void;
+	/** Last successful operator choices, loaded before the session starts. */
+	loadPreferences?: () => Readonly<AgentPreferences>;
+	/** Persist a successful model/thinking change immediately. */
+	savePreferences?: (patch: AgentPreferences) => void;
 	/** Extra tools registered alongside the built-ins (e.g. telegram_send_file). */
 	customTools?: unknown[];
 	/**
@@ -141,7 +147,19 @@ export class AgentHost {
 
 		if (created.modelFallbackMessage) this.log.warn({ msg: "model fallback", detail: created.modelFallbackMessage });
 
-		if (cfg.model) await this.applyModelOverride(session, cfg.model);
+		// Durable operator choices beat config/settings defaults. This is applied on
+		// both daemon startup and `/new`, so clearing context never resets controls.
+		const preferences = this.deps.loadPreferences?.() ?? {};
+		const wantedModel = preferences.model ?? cfg.model;
+		if (wantedModel) await this.applyModelOverride(session, wantedModel);
+
+		// The settings.json default model carries no map either; apply the same
+		// keyword inference so the startup model and the panel agree.
+		await this.enrichCurrentModel(session);
+
+		if (preferences.thinkingLevel) {
+			this.applyThinkingLevel(session, preferences.thinkingLevel, "restored");
+		}
 
 		// Subscribe before binding so nothing emitted during session_start is lost.
 		this.unsubscribe = session.subscribe((event: any) => this.deps.onEvent(generation, event));
@@ -150,7 +168,11 @@ export class AgentHost {
 			...(this.deps.uiContext ? { uiContext: this.deps.uiContext } : {}),
 			abortHandler: () => this.deps.onAbortRequested(),
 			shutdownHandler: () => this.deps.onShutdownRequested(),
-			onError: (err: unknown) => this.log.warn({ msg: "extension error", ...errFields(err) }),
+			onError: (err: unknown) => {
+				this.log.warn({ msg: "extension error", ...errFields(err) });
+				// Surface it as a session event so the live activity row can show it.
+				this.deps.onEvent(this.generationValue, { type: "extension_error", error: err instanceof Error ? err.message : String(err) });
+			},
 		});
 
 		// Built-ins grep/find/ls ship registered but inactive; extension tools are
@@ -166,6 +188,7 @@ export class AgentHost {
 			sessionId: session.sessionId,
 			model: `${session.model.provider}/${session.model.id}`,
 			thinking: session.supportsThinking() ? session.thinkingLevel : "unsupported",
+			thinkingLevels: session.getAvailableThinkingLevels(),
 			activeTools: session.getActiveToolNames(),
 			contextWindow: session.getContextUsage().contextWindow,
 		});
@@ -194,10 +217,54 @@ export class AgentHost {
 				});
 				return;
 			}
-			await (session as unknown as { setModel(m: unknown): Promise<void> }).setModel(match);
-			this.log.info({ msg: "model override applied", model: spec });
+			const enriched = enrichThinkingLevels(match);
+			await (session as unknown as { setModel(m: unknown): Promise<void> }).setModel(enriched);
+			this.log.info({ msg: "model override applied", model: spec, thinkingLevels: availableLevelsFor(enriched).join(",") });
 		} catch (err) {
 			this.log.warn({ msg: "model override failed, keeping default", wanted: spec, ...errFields(err) });
+		}
+	}
+
+	/**
+	 * Enrich the model the session booted with (settings.json default, or the
+	 * fallback when the configured override was not found). No-op unless the
+	 * keyword rules produce a map the session did not already carry.
+	 */
+	private async enrichCurrentModel(session: PiSession): Promise<void> {
+		try {
+			const current = session.model as unknown as ModelLike;
+			const enriched = enrichThinkingLevels(current);
+			if (enriched === current) return;
+			await (session as unknown as { setModel(m: unknown): Promise<void> }).setModel(enriched);
+			this.log.info({
+				msg: "thinking levels enriched for default model",
+				model: `${enriched.provider}/${enriched.id}`,
+				levels: availableLevelsFor(enriched).join(","),
+			});
+		} catch (err) {
+			this.log.warn({ msg: "thinking level enrichment failed, keeping SDK defaults", ...errFields(err) });
+		}
+	}
+
+	private applyThinkingLevel(session: PiSession, level: string, source: "panel" | "restored"): boolean {
+		if (!session.supportsThinking()) return false;
+		if (!session.getAvailableThinkingLevels().includes(level)) {
+			this.log.warn({
+				msg: "thinking preference unsupported by current model",
+				level,
+				model: `${session.model.provider}/${session.model.id}`,
+				available: session.getAvailableThinkingLevels(),
+				source,
+			});
+			return false;
+		}
+		try {
+			(session as unknown as { setThinkingLevel(l: string): void }).setThinkingLevel(level);
+			this.log.info({ msg: source === "panel" ? "thinking level changed" : "thinking level restored", level });
+			return true;
+		} catch (err) {
+			this.log.warn({ msg: "thinking switch failed", level, source, ...errFields(err) });
+			return false;
 		}
 	}
 
@@ -206,7 +273,13 @@ export class AgentHost {
 		if (!this.sessionValue) return false;
 		try {
 			await this.applyModelOverride(this.sessionValue, spec);
-			return `${this.sessionValue.model.provider}/${this.sessionValue.model.id}` === spec;
+			const ok = `${this.sessionValue.model.provider}/${this.sessionValue.model.id}` === spec;
+			if (ok) {
+				// setModel may clamp the old reasoning level for the new model. Save the
+				// effective pair atomically so `/new` restores a valid combination.
+				this.deps.savePreferences?.({ model: spec, thinkingLevel: this.sessionValue.thinkingLevel });
+			}
+			return ok;
 		} catch (err) {
 			this.log.warn({ msg: "panel model switch failed", spec, ...errFields(err) });
 			return false;
@@ -216,21 +289,23 @@ export class AgentHost {
 	/** Panel-driven thinking level switch. */
 	setThinking(level: string): boolean {
 		const session = this.sessionValue;
-		if (!session || !session.supportsThinking()) return false;
-		if (!session.getAvailableThinkingLevels().includes(level)) return false;
-		try {
-			(session as unknown as { setThinkingLevel(l: string): void }).setThinkingLevel(level);
-			this.log.info({ msg: "thinking level changed", level });
-			return true;
-		} catch (err) {
-			this.log.warn({ msg: "thinking switch failed", level, ...errFields(err) });
-			return false;
-		}
+		if (!session || !this.applyThinkingLevel(session, level, "panel")) return false;
+		this.deps.savePreferences?.({
+			model: `${session.model.provider}/${session.model.id}`,
+			thinkingLevel: session.thinkingLevel,
+		});
+		return true;
 	}
 
-	/** `/new`: drop the current session and start a clean one. */
+	/** `/new`: drop context, but preserve the effective model and reasoning. */
 	async reset(): Promise<void> {
 		const old = this.sessionValue;
+		if (old) {
+			this.deps.savePreferences?.({
+				model: `${old.model.provider}/${old.model.id}`,
+				thinkingLevel: old.thinkingLevel,
+			});
+		}
 		this.unsubscribe?.();
 		this.unsubscribe = null;
 		this.sessionValue = null;

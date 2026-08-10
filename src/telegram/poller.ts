@@ -107,6 +107,17 @@ export class Poller {
 			await this.api.deleteWebhook(this.abort.signal);
 		}
 
+		// Clear stale command lists left by a previous bot under the same token:
+		// the default scope and the private-chat scope are the ones that actually
+		// show in the slash menu. Telegram returns 400 for the admin/member scopes
+		// in a 1:1 chat, so they are not attempted.
+		await this.api
+			.deleteMyCommands({}, this.abort.signal)
+			.catch((err: unknown) => this.log.warn({ msg: "deleteMyCommands default failed (non-fatal)", ...errFields(err) }));
+		await this.api
+			.deleteMyCommands({ scope: { type: "chat", chat_id: this.opts.allowedUserId } }, this.abort.signal)
+			.catch((err: unknown) => this.log.warn({ msg: "deleteMyCommands chat scope failed (non-fatal)", ...errFields(err) }));
+
 		await this.api
 			.setMyCommands(this.opts.commands, this.abort.signal)
 			.then(() => this.log.info({ msg: "slash menu registered", commands: this.opts.commands.map((c) => c.command) }))

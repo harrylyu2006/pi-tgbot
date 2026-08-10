@@ -178,6 +178,21 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 		};
 	}
 
+	if (view === "confirm_restart") {
+		return {
+			text:
+				"<b>♻️ 重启 pi-tg</b>\n\n" +
+				(ctx.busy() ? "⚠️ 当前任务会被中断，但模型和思考等级会保留。\n\n" : "模型、思考等级和当前会话都会保留。\n\n") +
+				"确定立即重启？",
+			markup: keyboard([
+				[
+					{ text: "♻️ 确认重启", data: cb("do_restart") },
+					{ text: "取消", data: cb("view", "status") },
+				],
+			]),
+		};
+	}
+
 	// status (default)
 	const usage = session.getContextUsage();
 	const spec = ctx.modelSpec();
@@ -197,6 +212,10 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 	];
 	return {
 		text: lines.join("\n"),
-		markup: keyboard([nav(ctx, gen), [{ text: "🆕 新会话", data: cb("view", "confirm_new") }, { text: "⏹ 中断", data: cb("stop") }]]),
+		markup: keyboard([
+			nav(ctx, gen),
+			[{ text: "🆕 新会话", data: cb("view", "confirm_new") }, { text: "⏹ 中断", data: cb("stop") }],
+			[{ text: "♻️ 一键重启 pi-tg", data: cb("view", "confirm_restart") }],
+		]),
 	};
 }

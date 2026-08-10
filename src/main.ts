@@ -17,6 +17,7 @@ import { Poller } from "./telegram/poller.ts";
 import { LiveMessage } from "./telegram/live.ts";
 import { AgentHost } from "./agent/host.ts";
 import { createEventRouter } from "./agent/events.ts";
+import { IdleWatchdog } from "./agent/idle-watchdog.ts";
 import { AuditLog } from "./agent/audit.ts";
 import { State } from "./state.ts";
 import { Files } from "./telegram/files.ts";
@@ -68,7 +69,11 @@ class Dispatcher {
 	private running = false;
 	private live: LiveMessage | null = null;
 	private settle: (() => void) | null = null;
-	private wallClock: NodeJS.Timeout | null = null;
+	private readonly idleWatchdog = new IdleWatchdog(config.turn.idleTimeoutMs, () => {
+		if (!this.running) return;
+		log.warn({ msg: "turn inactive, aborting", idleTimeoutMs: config.turn.idleTimeoutMs });
+		void this.host.session.abort();
+	});
 	private activeChatId: number | null = null;
 
 	private readonly host: AgentHost;
@@ -94,7 +99,13 @@ class Dispatcher {
 		return this.live;
 	}
 
+	/** Any accepted Telegram request or agent event proves this turn is alive. */
+	noteActivity(): void {
+		if (this.running) this.idleWatchdog.touch();
+	}
+
 	enqueue(item: { text: string; chatId: number; replyTo: number }): void {
+		this.noteActivity();
 		const queued: { text: string; chatId: number; replyTo: number; placeholderId?: number } = { ...item };
 		this.queue.push(queued);
 		if (this.running) {
@@ -157,11 +168,7 @@ class Dispatcher {
 			// Recorded only after the placeholder exists, so a restart can point at
 			// a real message rather than at a turn that never became visible.
 			state.beginTurn({ chatId: item.chatId, messageId: live.stats.messageId ?? item.replyTo, startedAt });
-			this.wallClock = setTimeout(() => {
-				log.warn({ msg: "turn exceeded wall clock, aborting", limitMs: config.turn.wallClockMs });
-				void this.host.session.abort();
-			}, config.turn.wallClockMs);
-			this.wallClock.unref?.();
+			this.idleWatchdog.touch();
 
 			await this.host.session.prompt(item.text);
 			await settled;
@@ -172,8 +179,7 @@ class Dispatcher {
 			await live.finish(`⚠️ 这一轮失败了：\n${String(err).slice(0, 800)}`).catch(() => {});
 		} finally {
 			typing.stop();
-			if (this.wallClock) clearTimeout(this.wallClock);
-			this.wallClock = null;
+			this.idleWatchdog.stop();
 			this.activeChatId = null;
 			state.endTurn();
 			log.info({ msg: "turn end", durationMs: Date.now() - startedAt, edits: live.stats.edits, messageId: live.stats.messageId });
@@ -211,9 +217,14 @@ const route = createEventRouter({
 const host = new AgentHost({
 	config,
 	log: log.child("agent"),
-	onEvent: (generation, event) => route(generation, event),
+	onEvent: (generation, event) => {
+		dispatcher?.noteActivity();
+		route(generation, event);
+	},
 	onAbortRequested: () => void host.session.abort(),
 	onShutdownRequested: () => void shutdown("extension"),
+	loadPreferences: () => state.agentPreferences,
+	savePreferences: (patch) => state.setAgentPreferences(patch),
 	customTools: [
 		createSendFileTool({ currentChatId: () => dispatcher?.currentChatId ?? null, files, log: log.child("outbox") }),
 		createAskTool({ ui: telegramUI, log: log.child("ask") }),
@@ -253,7 +264,7 @@ const panelCtx: PanelContext = {
 	busy: () => dispatcher.busy,
 	queueDepth: () => dispatcher.queueDepth,
 	uptimeMs: () => Date.now() - bootedAt,
-	modelSpec: () => config.model,
+	modelSpec: () => state.agentPreferences.model ?? config.model,
 };
 
 async function showPanel(chatId: number, view: string, editMessageId?: number): Promise<void> {
@@ -325,6 +336,21 @@ async function handleCallback(update: TgUpdate): Promise<void> {
 			await answer("正在开新会话…");
 			await host.reset();
 			await showPanel(chatId, "status", messageId);
+			return;
+		case "do_restart":
+			// Answer the callback and visibly acknowledge the request before exiting.
+			// systemd Restart=always starts the process again; no shell/systemctl call
+			// (and therefore no extra privilege) is needed inside the bot.
+			await answer("正在重启 pi-tg…");
+			await api
+				.editMessageText({
+					chat_id: chatId,
+					message_id: messageId,
+					text: "♻️ <b>pi-tg 正在重启…</b>\n\n几秒后发送 /start 即可打开新面板。",
+					parse_mode: "HTML",
+				})
+				.catch(() => undefined);
+			void shutdown("panel restart");
 			return;
 		case "mpage": {
 			await answer();
@@ -428,6 +454,10 @@ async function handleSticker(msg: NonNullable<TgUpdate["message"]>): Promise<voi
 }
 
 function handleUpdate(update: TgUpdate): void {
+	// Every incoming request renews a running turn's inactivity window, including
+	// control commands, callbacks and mid-turn prompts that will be queued.
+	dispatcher?.noteActivity();
+
 	// A redelivered update means we processed it but the confirming getUpdates
 	// never landed. Answering twice is worse than answering once.
 	if (state.alreadySeen(update.update_id)) {

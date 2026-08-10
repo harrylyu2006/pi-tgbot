@@ -205,7 +205,7 @@ Do not load another Telegram polling extension with the same token. `AgentHost` 
 
 ### Turn and backlog controls
 
-- `turn.wallClockMs` — abort the pi session if one turn exceeds this wall-clock limit.
+- `turn.idleTimeoutMs` — abort a running pi session only after this long with no incoming request and no agent progress event. Every accepted Telegram update or SDK event renews the window; it is not a fixed total-runtime cap.
 - `coldStart.staleSeconds` — on startup, acknowledge and skip older queued messages rather than executing a possibly dangerous backlog.
 
 ### Files
