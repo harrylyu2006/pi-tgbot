@@ -20,8 +20,9 @@ It runs one persistent pi session as a headless daemon, receives prompts through
 - **Interactive confirmation UI** — extensions can route `confirm` and `select` prompts to Telegram inline buttons; timeouts and delivery failures deny by default.
 - **Operational controls** — `/start`, `/status`, `/tokens`, `/new`, `/stop`, model switching, thinking-level switching, and tool visibility.
 - **Crash recovery** — remembers seen update IDs, skips stale offline backlogs, and warns when a previous turn was interrupted.
-- **Defence in depth** — structured log redaction, outbound secret redaction, tool audit records, dangerous-command confirmation, and remote fan-out guards.
-- **Explicit extension loading** — disables ambient extension discovery and loads only the configured extension allowlist.
+- **Web access included** — ships with pinned `pi-web-access` support for web search, readable page fetching, source checks, PDFs, GitHub repositories, and videos.
+- **Defence in depth** — structured log redaction, outbound secret redaction, bounded file delivery, and tool audit records.
+- **Explicit extension loading** — disables ambient extension discovery and loads only the built-in web extension plus the configured extension allowlist.
 
 ## Architecture
 
@@ -59,7 +60,7 @@ Important source areas:
 - `src/telegram/live.ts` — streaming edits, throttling, final notification delivery, rendering fallback, and redaction.
 - `src/telegram/files.ts` — safe inbound filenames, size limits, retention, and outbound root checks.
 - `src/ui/telegram-ui.ts` — inline-button UI adapter for extension confirmations and choices.
-- `extensions/` — optional security and fleet fan-out guards.
+- `pi-web-access` — pinned npm dependency loaded automatically for web search and content fetching.
 
 ## Requirements
 
@@ -69,7 +70,8 @@ Important source areas:
 - A Telegram bot token from [@BotFather](https://t.me/BotFather).
 - Your numeric Telegram user ID.
 - At least one model/provider authenticated in pi's agent directory.
-- Optional: `ffmpeg` for extracting the first frame from video stickers.
+- Optional search-provider credentials for `pi-web-access`; zero-config search can fall back to Exa.
+- Optional: `ffmpeg` for extracting the first frame from video stickers and for supported web/video workflows.
 
 ## Install
 
@@ -81,7 +83,7 @@ cd pi-tgbot
 npm ci --ignore-scripts
 ```
 
-`--ignore-scripts` reduces supply-chain exposure. The current dependencies do not require lifecycle scripts for normal operation.
+`pi-web-access` is pinned in `package.json` and loaded automatically; it does not need a separate `pi install`. Its provider configuration is read from the service account's normal pi-web-access config (typically `~/.pi/web-search.json`), which is private and must not be committed. Without provider keys, its zero-config search fallback can use Exa. `--ignore-scripts` reduces supply-chain exposure. The current dependencies do not require lifecycle scripts for normal operation.
 
 ### 2. Prepare a dedicated service account and directories
 
@@ -187,11 +189,12 @@ The loader rejects unknown keys so typos in safety controls fail loudly.
 - `statePath` — durable seen-update and interrupted-turn state. Written atomically with mode `0600`.
 - `auditPath` — append-only JSONL tool audit log. Created with mode `0600`.
 
-### Model and extensions
+### Model, web access, and extensions
 
 - `model` — optional exact `provider/model-id` override. If omitted, pi's `settings.json` default is used.
-- `extensions` — explicit extension paths or `npm:` specifiers. Ambient extension discovery is disabled.
-- `tools.deny` — tool names to exclude.
+- The pinned `pi-web-access` dependency is always loaded automatically and provides web search, content fetching, source checks, and stored-content retrieval. Configure its provider separately as the service account; do not place API keys in `config.json`.
+- `extensions` — optional additional extension paths or `npm:` specifiers. Ambient extension discovery is disabled.
+- `tools.deny` — tool names to exclude, including any web tools you do not want enabled.
 - `tools.extraActive` — registered tools to activate in addition to pi's defaults.
 
 Do not load another Telegram polling extension with the same token. `AgentHost` refuses known `pi-telegram` extensions because two `getUpdates` consumers cause Telegram 409 conflicts.
@@ -259,16 +262,6 @@ This project is designed as defence in depth, not as a sandbox.
 
 Redaction is necessarily heuristic. It can miss unusual secrets and can occasionally redact harmless text. Do not rely on it as the only control.
 
-### Tool controls
-
-The optional `extensions/security.ts`:
-
-- asks before recursive deletion, `sudo`, raw-device writes, destructive Git commands, and similar operations;
-- blocks writes to environment files, credential files, SSH keys, `.git`, and `node_modules`;
-- fails closed when a confirmation UI is unavailable.
-
-The optional `extensions/fanout-guard.ts` asks before multi-host SSH/Ansible/fleet operations and remote state-changing commands. Its purpose is to limit prompt-injection blast radius, not to prove a command safe.
-
 ### Deployment recommendations
 
 1. Run as a dedicated unprivileged user or inside a VM/container.
@@ -292,7 +285,6 @@ The test command runs:
 - Streaming Markdown/HTML safety checks over every prefix of an adversarial document.
 - Outbound redaction fixtures, including false-positive checks.
 - Fail-closed Telegram UI confirmation tests.
-- Fleet fan-out guard fixtures.
 - Publication secret and forbidden-file checks.
 
 An optional live SDK probe creates an isolated pi session and performs a real model request:

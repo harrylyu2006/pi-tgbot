@@ -20,24 +20,25 @@
     "start": "node src/main.ts",
     "probe": "node scripts/probe.ts",
     "check": "tsc --noEmit",
-    "test": "npm run check && npm run test:render && npm run test:redact && npm run test:ui && npm run test:fanout && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:idle-watchdog && npm run test:panel && npm run publication-check",
+    "test": "npm run check && npm run test:render && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:idle-watchdog && npm run test:panel && npm run test:web-access && npm run publication-check",
     "test:render": "node scripts/render-check.ts",
     "test:redact": "node scripts/redact-check.ts",
     "test:ui": "node scripts/ui-failclosed.ts",
-    "test:fanout": "node scripts/fanout-check.mjs",
     "test:activity": "node scripts/activity-check.ts",
-    "test:reasoning": "node scripts/reasoning-check.ts",
+    "test:reasoning": "node scripts/reasoning-check.ts && node scripts/reasoning-payload-check.ts && node scripts/reasoning-anthropic-payload-check.ts",
     "test:state": "node scripts/state-check.ts",
     "test:idle-watchdog": "node scripts/idle-watchdog-check.ts",
     "test:panel": "node scripts/panel-check.ts",
+    "test:web-access": "node scripts/web-access-check.ts",
     "publication-check": "node scripts/publication-check.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
+    "pi-web-access": "0.18.0",
     "typebox": "1.3.7"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "@types/node": "^24.0.0"
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
   }
 }

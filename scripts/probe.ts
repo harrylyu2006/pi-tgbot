@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const CWD = process.env.PI_TG_PROBE_CWD ?? process.cwd();
 const AGENT_DIR = process.env.PI_TG_PROBE_AGENT_DIR ?? `${process.env.HOME ?? CWD}/.pi/agent`;
@@ -92,35 +93,34 @@ try {
 }
 
 let loader: any = null;
-for (const spec of ["npm:pi-web-access"]) {
-	console.log(`\n  -- trying additionalExtensionPaths: ${JSON.stringify(spec)}`);
-	try {
-		const l = new DefaultResourceLoader({
-			cwd: CWD,
-			agentDir: AGENT_DIR,
-			settingsManager,
-			noExtensions: true,
-			additionalExtensionPaths: [spec],
-		});
-		await l.reload();
-		const res = l.getExtensions();
-		const paths = (res.extensions ?? []).map((e: any) => e.resolvedPath ?? e.path);
-		const errs = res.errors ?? [];
-		info(`loaded ${paths.length} extension(s): ${JSON.stringify(paths)}`);
-		if (errs.length) info(`errors: ${JSON.stringify(errs).slice(0, 500)}`);
-		const gotWeb = paths.some((p: string) => /pi-web-access/.test(String(p)));
-		const gotTelegram = paths.some((p: string) => /pi-telegram/.test(String(p)));
-		if (gotWeb) {
-			ok(`pi-web-access loaded via ${spec}`);
-			if (gotTelegram) bad("@llblab/pi-telegram ALSO loaded — it would fight us for the bot token");
-			else ok("@llblab/pi-telegram correctly NOT loaded");
-			loader = l;
-			break;
-		}
-		bad(`pi-web-access not among loaded extensions for ${spec}`);
-	} catch (err) {
-		bad(`loader failed for ${spec}: ${String(err).slice(0, 300)}`);
+const bundledWebAccess = fileURLToPath(new URL("../node_modules/pi-web-access", import.meta.url));
+console.log(`\n  -- trying bundled pi-web-access: ${bundledWebAccess}`);
+try {
+	const l = new DefaultResourceLoader({
+		cwd: CWD,
+		agentDir: AGENT_DIR,
+		settingsManager,
+		noExtensions: true,
+		additionalExtensionPaths: [bundledWebAccess],
+	});
+	await l.reload();
+	const res = l.getExtensions();
+	const paths = (res.extensions ?? []).map((e: any) => e.resolvedPath ?? e.path);
+	const errs = res.errors ?? [];
+	info(`loaded ${paths.length} extension(s): ${JSON.stringify(paths)}`);
+	if (errs.length) info(`errors: ${JSON.stringify(errs).slice(0, 500)}`);
+	const gotWeb = paths.some((p: string) => /pi-web-access/.test(String(p)));
+	const gotTelegram = paths.some((p: string) => /pi-telegram/.test(String(p)));
+	if (gotWeb) {
+		ok("bundled pi-web-access loaded from this repository's dependency tree");
+		if (gotTelegram) bad("@llblab/pi-telegram ALSO loaded — it would fight us for the bot token");
+		else ok("@llblab/pi-telegram correctly NOT loaded");
+		loader = l;
+	} else {
+		bad("bundled pi-web-access not among loaded extensions");
 	}
+} catch (err) {
+	bad(`loader failed for bundled pi-web-access: ${String(err).slice(0, 300)}`);
 }
 if (!loader) {
 	bad("no working extension spec found — continuing with a bare loader so later probes still run");
@@ -194,11 +194,18 @@ info(`active AFTER: ${JSON.stringify(active)}`);
 const newTools = after.filter((n: string) => !before.includes(n));
 if (newTools.length) ok(`bindExtensions registered new tools: ${JSON.stringify(newTools)}`);
 else bad("bindExtensions registered NO new tools — pi-web-access tools will be missing");
-for (const t of ["web_search", "fetch_content"]) {
-	if (after.includes(t)) {
-		if (active.includes(t)) ok(`${t}: registered AND active`);
-		else bad(`${t}: registered but NOT active — M1 tool sweep must activate it explicitly`);
-	} else bad(`${t}: not registered at all`);
+const webToolPairs = [
+	["web_search", "brave_search"],
+	["fetch_content", "brave_fetch"],
+] as const;
+for (const pair of webToolPairs) {
+	const t = pair.find((name) => after.includes(name));
+	if (!t) {
+		bad(`${pair.join(" or ")}: neither tool name is registered`);
+		continue;
+	}
+	if (active.includes(t)) ok(`${t}: registered AND active`);
+	else bad(`${t}: registered but NOT active — M1 tool sweep must activate it explicitly`);
 }
 const sample = session.getAllTools()[0];
 info(`ToolInfo shape: ${JSON.stringify(Object.keys(sample ?? {}))}`);

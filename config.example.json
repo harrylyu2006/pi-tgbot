@@ -30,8 +30,5 @@
     "maxUploadMb": 50,
     "retentionDays": 14
   },
-  "extensions": [
-    "./extensions/security.ts",
-    "./extensions/fanout-guard.ts"
-  ]
+  "extensions": []
 }

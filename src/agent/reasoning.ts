@@ -6,9 +6,8 @@
  * set for any model flagged `reasoning` (standard levels through "high";
  * "xhigh"/"max" only appear when the map names them). Custom/provider models
  * rarely carry a map, so the panel would show thinking levels the endpoint
- * cannot actually serve — "minimal"/"medium" on a DeepSeek V4 endpoint that
- * only understands off/low/high, or no "xhigh"/"max" on a GPT-5.6 that
- * accepts them.
+ * cannot actually serve — aliases on a DeepSeek V4 endpoint that only exposes
+ * off/high/max, or no "xhigh"/"max" on a GPT-5.6 that accepts them.
  *
  * This module infers a map from normalized provider/id/name keywords and
  * attaches it to the model object before the model reaches the session, so
@@ -27,6 +26,8 @@ export interface ModelLike {
 	id?: unknown;
 	name?: unknown;
 	provider?: unknown;
+	api?: unknown;
+	baseUrl?: unknown;
 	reasoning?: boolean;
 	thinkingLevelMap?: ThinkingLevelMap;
 	compat?: Record<string, unknown>;
@@ -51,17 +52,23 @@ function inferThinkingLevelMap(model: ModelLike): InferredThinking | undefined {
 	const id = compact(model.id);
 	const provider = compact(model.provider);
 	const idName = idAndName(model);
-	const customOpenAICompatible = provider !== "openrouter";
+	const routedThroughOpenRouter = provider === "openrouter" || compact(model.baseUrl).includes("openrouterai");
+	const directAnthropicMessages = provider === "anthropic" || compact(model.api) === "anthropicmessages";
+	const adaptiveClaudeCompat = directAnthropicMessages ? { forceAdaptiveThinking: true, supportsTemperature: false } : undefined;
 
-	// DeepSeek V4 Flash / Pro: OpenAI-compatible chat uses thinking.enabled /
-	// thinking.disabled plus reasoning_effort low/high/max; xhigh is accepted
-	// and folds into high. minimal/medium are not real DeepSeek modes.
-	if ((idName.includes("deepseek") || provider.includes("deepseek")) && /v4/.test(idName) && /(flash|pro)/.test(idName)) {
+	// DeepSeek V4 is provider-sensitive. Native/compatible DeepSeek endpoints
+	// expose off/high/max and use the DeepSeek thinking object. OpenRouter has
+	// its own normalized reasoning object and currently exposes off/high/xhigh.
+	if (idName.includes("deepseek") && /v4/.test(idName) && /(flash|pro)/.test(idName)) {
+		if (routedThroughOpenRouter) {
+			return {
+				map: { minimal: null, low: null, medium: null, high: "high", xhigh: "xhigh", max: null },
+				compat: { thinkingFormat: "openrouter" },
+			};
+		}
 		return {
-			map: { minimal: null, medium: null, xhigh: "high", max: "max" },
-			...(customOpenAICompatible
-				? { compat: { thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true } }
-				: {}),
+			map: { minimal: null, low: null, medium: null, high: "high", xhigh: null, max: "max" },
+			compat: { thinkingFormat: "deepseek", requiresReasoningContentOnAssistantMessages: true },
 		};
 	}
 
@@ -69,44 +76,82 @@ function inferThinkingLevelMap(model: ModelLike): InferredThinking | undefined {
 	// support the older GPT-5 "minimal" label. Pi's "off" maps to wire "none".
 	if (/gpt56/.test(idName)) return { map: { off: "none", minimal: null, xhigh: "xhigh", max: "max" } };
 	// GPT-5.2 through 5.5 support none/low/medium/high/xhigh, again no minimal.
+	// GPT-5.5 Pro is narrower: medium/high/xhigh only.
+	if (/gpt55pro/.test(idName)) {
+		return { map: { off: null, minimal: null, low: null, medium: "medium", high: "high", xhigh: "xhigh", max: null } };
+	}
 	if (/gpt5[2345]/.test(idName)) return { map: { off: "none", minimal: null, xhigh: "xhigh" } };
 
-	// Claude adaptive effort has no "minimal" wire level; pi-ai folds minimal to
-	// low, but showing a second low alias is misleading, so hide it.
-	if (/claude[^0-9]*46/.test(id)) return { map: { minimal: null, max: "max" } };
-	if (/claude[^0-9]*4[78]/.test(id)) return { map: { minimal: null, xhigh: "xhigh", max: "max" } };
-	// Fable 5 adaptive thinking is always on; Opus/Sonnet 5 can still disable
-	// thinking at high-or-below effort.
-	if (/fable[^0-9]*5/.test(idName)) return { map: { off: null, minimal: null, xhigh: "xhigh", max: "max" } };
-	if (/claude[^0-9]*5/.test(id)) return { map: { minimal: null, xhigh: "xhigh", max: "max" } };
+	// Claude rules use explicit API-id families, not a broad "claude ... 5"
+	// substring. Opus/Sonnet 4.6 have max but not xhigh; Opus 4.7/4.8 and
+	// Opus/Sonnet 5 add xhigh. Fable/Mythos 5 are always-thinking.
+	const claudeOpus46 = /claudeopus46/.test(id);
+	const claudeSonnet46 = /claudesonnet46/.test(id);
+	const claudeOpus47or48 = /claudeopus4[78]/.test(id);
+	const claudeOpusOrSonnet5 = /claude(?:opus|sonnet)5/.test(id);
+	const claudeFableOrMythos5 = /claude(?:fable|mythos)5/.test(id);
+	if (claudeOpus46 || claudeSonnet46) {
+		return { map: { minimal: null, max: "max" }, ...(adaptiveClaudeCompat ? { compat: adaptiveClaudeCompat } : {}) };
+	}
+	if (claudeOpus47or48 || claudeOpusOrSonnet5) {
+		return {
+			map: { minimal: null, xhigh: "xhigh", max: "max" },
+			...(adaptiveClaudeCompat ? { compat: adaptiveClaudeCompat } : {}),
+		};
+	}
+	if (claudeFableOrMythos5) {
+		return {
+			map: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+			...(adaptiveClaudeCompat ? { compat: adaptiveClaudeCompat } : {}),
+		};
+	}
 
 	// Gemini 3.5 / 3.6 reason unconditionally: off/xhigh/max are hidden, only
 	// minimal/low/medium/high are offered.
 	if (/gemini[^0-9]*3[56]/.test(idName)) return { map: { off: null, xhigh: null, max: null } };
 
-	// xAI Grok reasoning cannot be disabled; documented effort is low/medium/high.
+	// xAI Grok reasoning cannot be disabled. Normal reasoning models expose
+	// low/medium/high; grok-4.20-multi-agent additionally accepts xhigh to select
+	// the larger agent team.
 	if ((provider === "xai" || provider.includes("xai") || idName.includes("grok")) && model.reasoning === true) {
+		if (/grok420multiagent/.test(idName)) {
+			return { map: { off: null, minimal: null, xhigh: "xhigh", max: null } };
+		}
 		return { map: { off: null, minimal: null, xhigh: null, max: null } };
 	}
 
-	// GLM-5.2 accepts none/minimal/low/medium/high/xhigh/max. Z.ai maps low and
-	// medium to high, and xhigh to max, but those aliases are documented wire
-	// values. Pi's off maps to the documented "none" / disabled toggle.
+	// GLM-5.2 has only two real on-states. Keep the UI truthful instead of
+	// showing aliases that collapse to the same behavior: off/high/max.
 	if (/glm52/.test(idName)) {
 		return {
-			map: { off: "none", xhigh: "xhigh", max: "max" },
-			...(customOpenAICompatible ? { compat: { thinkingFormat: "zai" } } : {}),
+			map: { off: "none", minimal: null, low: null, medium: null, high: "high", xhigh: null, max: "max" },
+			...(!routedThroughOpenRouter ? { compat: { thinkingFormat: "zai" } } : {}),
 		};
 	}
 
-	// Kimi K3 always reasons and accepts low/high/max only.
-	if (/kimik3/.test(idName)) return { map: { off: null, minimal: null, medium: null, xhigh: null, max: "max" } };
+	// Kimi K3 always reasons and accepts low/high/max only. Its endpoint uses
+	// OpenAI-style reasoning_effort, not Moonshot's older DeepSeek toggle.
+	if (/kimik3/.test(idName)) {
+		return {
+			map: { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
+			...(!routedThroughOpenRouter
+				? {
+						compat: {
+							thinkingFormat: "openai",
+							supportsReasoningEffort: true,
+							requiresReasoningContentOnAssistantMessages: true,
+							deferredToolsMode: "kimi",
+						},
+					}
+				: {}),
+		};
+	}
 
 	// Qwen3.8 Max always thinks and accepts low/medium/xhigh only.
 	if (/qwen38max/.test(idName)) {
 		return {
-			map: { off: null, minimal: null, high: null, max: null, xhigh: "xhigh" },
-			...(customOpenAICompatible ? { compat: { thinkingFormat: "qwen" } } : {}),
+			map: { off: null, minimal: null, low: "low", medium: "medium", high: null, xhigh: "xhigh", max: null },
+			...(!routedThroughOpenRouter ? { compat: { thinkingFormat: "qwen", supportsReasoningEffort: true } } : {}),
 		};
 	}
 
@@ -130,6 +175,15 @@ export function enrichThinkingLevels<T extends ModelLike>(model: T): T {
 		thinkingLevelMap: inferred.map,
 		...(inferred.compat ? { compat: { ...(model.compat ?? {}), ...inferred.compat } } : {}),
 	};
+}
+
+/**
+ * Provider-native default that differs from Pi's generic `medium` default.
+ * User-restored choices still take priority; this is only for a fresh profile.
+ */
+export function preferredDefaultThinkingLevelFor(model: ModelLike): ModelThinkingLevel | undefined {
+	if (model.reasoning !== true) return undefined;
+	return /qwen38max/.test(idAndName(model)) ? "xhigh" : undefined;
 }
 
 /**

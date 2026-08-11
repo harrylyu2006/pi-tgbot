@@ -1,8 +1,7 @@
 /**
  * Outbound redaction: scrub secrets on their way *out* to Telegram.
  *
- * This is the mirror image of the upstream `filter-output` extension, which
- * scrubs tool results on the way *in* to the model. Inbound scrubbing is right
+ * This is intentionally separate from inbound tool-result filtering. Inbound scrubbing is right
  * when the worry is secrets reaching a third-party LLM; it is wrong here,
  * because the operator's own tasks (SSH into their fleet) require the model to
  * read credentials it has been given.

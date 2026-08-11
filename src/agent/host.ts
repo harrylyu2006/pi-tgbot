@@ -14,10 +14,14 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { errFields, type Logger } from "../log.ts";
 import type { Config } from "../config.ts";
 import type { AgentPreferences } from "../state.ts";
-import { availableLevelsFor, enrichThinkingLevels, type ModelLike } from "./reasoning.ts";
+import { availableLevelsFor, enrichThinkingLevels, preferredDefaultThinkingLevelFor, type ModelLike } from "./reasoning.ts";
+
+const BUILTIN_EXTENSIONS = [fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url))];
+const BUILTIN_EXTENSION_PACKAGES = /^npm:pi-web-access(?:@|$)/;
 
 // The SDK ships .d.ts that pull in its own module graph; typing it precisely
 // here would couple us to internals we deliberately do not depend on. The
@@ -99,12 +103,14 @@ export class AgentHost {
 		// is never imported. Filtering after discovery would be too late: the
 		// extension would already have run and started competing for our bot
 		// token on the same getUpdates slot.
+		const configuredExtensions = cfg.extensions.filter((extension) => !BUILTIN_EXTENSION_PACKAGES.test(extension));
+		const extensionPaths = [...new Set([...BUILTIN_EXTENSIONS, ...configuredExtensions])];
 		this.loader = new this.pi.DefaultResourceLoader({
 			cwd: cfg.cwd,
 			agentDir: cfg.agentDir,
 			settingsManager: this.settingsManager,
 			noExtensions: true,
-			additionalExtensionPaths: cfg.extensions,
+			additionalExtensionPaths: extensionPaths,
 		});
 		await this.loader.reload();
 
@@ -158,7 +164,14 @@ export class AgentHost {
 		await this.enrichCurrentModel(session);
 
 		if (preferences.thinkingLevel) {
-			this.applyThinkingLevel(session, preferences.thinkingLevel, "restored");
+			const restored = this.applyThinkingLevel(session, preferences.thinkingLevel, "restored");
+			if (!restored) {
+				const preferredDefault = preferredDefaultThinkingLevelFor(session.model as unknown as ModelLike);
+				if (preferredDefault) this.applyThinkingLevel(session, preferredDefault, "default");
+			}
+		} else {
+			const preferredDefault = preferredDefaultThinkingLevelFor(session.model as unknown as ModelLike);
+			if (preferredDefault) this.applyThinkingLevel(session, preferredDefault, "default");
 		}
 
 		// Subscribe before binding so nothing emitted during session_start is lost.
@@ -246,7 +259,7 @@ export class AgentHost {
 		}
 	}
 
-	private applyThinkingLevel(session: PiSession, level: string, source: "panel" | "restored"): boolean {
+	private applyThinkingLevel(session: PiSession, level: string, source: "panel" | "restored" | "default"): boolean {
 		if (!session.supportsThinking()) return false;
 		if (!session.getAvailableThinkingLevels().includes(level)) {
 			this.log.warn({
@@ -260,7 +273,10 @@ export class AgentHost {
 		}
 		try {
 			(session as unknown as { setThinkingLevel(l: string): void }).setThinkingLevel(level);
-			this.log.info({ msg: source === "panel" ? "thinking level changed" : "thinking level restored", level });
+			this.log.info({
+				msg: source === "panel" ? "thinking level changed" : source === "restored" ? "thinking level restored" : "provider thinking default applied",
+				level,
+			});
 			return true;
 		} catch (err) {
 			this.log.warn({ msg: "thinking switch failed", level, source, ...errFields(err) });

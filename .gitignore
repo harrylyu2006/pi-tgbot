@@ -21,6 +21,7 @@ credentials*
 secrets.*
 auth.json
 models.json
+web-search.json
 
 # Runtime state, transcripts, logs, and downloaded files
 .pi-subagents/

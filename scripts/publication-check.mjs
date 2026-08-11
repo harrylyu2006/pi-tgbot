@@ -33,6 +33,7 @@ const denyNames = [
   /(^|\/)config\.(?!example\.json$).+\.json$/i,
   /(^|\/)auth\.json$/i,
   /(^|\/)models\.json$/i,
+  /(^|\/)web-search\.json$/i,
   /(^|\/)\.env(?:\.|$)/i,
   /(^|\/)credentials/i,
   /(^|\/)secrets?\./i,
