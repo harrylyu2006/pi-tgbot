@@ -14,7 +14,10 @@ export interface RenderConfig {
 	editThrottleMs: number;
 	/** Target body size. Below 4096 because HTML entity expansion inflates it. */
 	maxChars: number;
-	/** Hard ceiling on edits per turn, so a pathological tool loop can't burn the rate budget. */
+	/**
+	 * Soft ceiling for routine churn. Meaningful answer/thinking changes may still
+	 * edit after this point so a long live turn never looks frozen.
+	 */
 	maxEditsPerTurn: number;
 	/** Turns longer than this deliver the answer as a new message, so Telegram notifies. */
 	notifyAfterMs: number;
@@ -84,7 +87,7 @@ const DEFAULTS = {
 	agentDir: `${DEFAULT_HOME}/.pi/agent`,
 	sessionDir: "/var/lib/pi-tg/sessions",
 	logLevel: "info" as Level,
-	render: { editThrottleMs: 2500, maxChars: 3800, maxEditsPerTurn: 120, notifyAfterMs: 30_000 },
+	render: { editThrottleMs: 2500, maxChars: 3800, maxEditsPerTurn: 600, notifyAfterMs: 30_000 },
 	tools: { deny: [] as string[], extraActive: ["grep", "find", "ls"] },
 	turn: { idleTimeoutMs: 20 * 60 * 1000 },
 	statePath: "/var/lib/pi-tg/state.json",

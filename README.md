@@ -200,7 +200,7 @@ Do not load another Telegram polling extension with the same token. `AgentHost` 
 
 - `render.editThrottleMs` — minimum time between edits to one Telegram message; must be at least 1000 ms.
 - `render.maxChars` — target payload size; must remain below Telegram's 4096-character limit.
-- `render.maxEditsPerTurn` — hard cap on live edits for one agent turn.
+- `render.maxEditsPerTurn` — soft cap for status-only live edits; new answer/thinking content may still edit after the cap so long turns do not appear frozen.
 - `render.notifyAfterMs` — turns longer than this send the final answer as new messages to trigger a notification.
 
 ### Turn and backlog controls

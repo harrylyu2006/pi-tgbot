@@ -117,6 +117,14 @@ for (const [i, c] of bigChunks.entries()) {
 	if (!c.startsWith("<pre><code")) fail(`bigcode chunk ${i} lost its code wrapper`, c.slice(0, 80));
 }
 
+console.log("[3b] nested tag repair");
+{
+	const malformedNested = '<blockquote expandable><b>thinking</blockquote>';
+	const repaired = closeOpenTags(malformedNested);
+	if (repaired === malformedNested) console.log("  ✓ outer close removes stale inner tag from repair stack");
+	else fail("outer close left a stale inner tag in the repair stack", repaired);
+}
+
 console.log("[4] expected renderings");
 const cases: Array<[string, string]> = [
 	["**b**", "<b>b</b>"],

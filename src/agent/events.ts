@@ -29,6 +29,8 @@ import type { Logger } from "../log.ts";
 export interface TurnSink {
 	onStart(): void;
 	onAnswer(cumulative: string): void;
+	/** Provider-visible reasoning summary / chain-of-thought, when the API exposes it. */
+	onThinking(cumulative: string): void;
 	onActivity(line: string): void;
 	onSettled(finalText: string): void;
 }
@@ -66,6 +68,20 @@ export function cumulativeText(message: unknown): string {
 		if (!block || typeof block !== "object") continue;
 		const b = block as { type?: string; text?: string };
 		if (b.type === "text" && typeof b.text === "string") out.push(b.text);
+	}
+	return out.join("");
+}
+
+/** Pull cumulative provider-visible thinking blocks out of a partial message. */
+export function cumulativeThinking(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const content = (message as { content?: unknown }).content;
+	if (!Array.isArray(content)) return "";
+	const out: string[] = [];
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		const b = block as { type?: string; thinking?: string; redacted?: boolean };
+		if (b.type === "thinking" && b.redacted !== true && typeof b.thinking === "string") out.push(b.thinking);
 	}
 	return out.join("");
 }
@@ -242,6 +258,7 @@ function boundActivity(block: string): string {
 
 export function createEventRouter(deps: EventRouterDeps): (generation: number, event: any) => void {
 	let latestAnswer = "";
+	let latestThinking = "";
 	let latestError: string | null = null;
 	let latestStop: string | null = null;
 	let latestReasoning = 0;
@@ -342,6 +359,7 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 		switch (type) {
 			case "agent_start": {
 				latestAnswer = "";
+				latestThinking = "";
 				latestError = null;
 				latestStop = null;
 				latestReasoning = 0;
@@ -372,16 +390,26 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 					latestAnswer = text;
 					deps.sink.onAnswer(text);
 				}
-				// Intermediate model phases from the stream: never the content of
-				// chain-of-thought, only the phase label.
+				const thinking = cumulativeThinking(event.message);
+				if (thinking !== latestThinking) {
+					latestThinking = thinking;
+					deps.sink.onThinking(thinking);
+				}
 				const et = event.assistantMessageEvent;
 				const etType = et && typeof et === "object" && typeof et.type === "string" ? et.type : "";
 				if (etType.startsWith("thinking")) {
 					phase = "thinking";
 					pendingTool = null;
+				} else if (etType === "toolcall_start" || etType === "toolcall_delta") {
+					const partial = record(et.partial);
+					const content = Array.isArray(partial.content) ? partial.content : [];
+					const block = record(content[Number(et.contentIndex)]);
+					const name = typeof block.name === "string" && block.name ? block.name : "工具";
+					pendingTool = { name, detail: toolActivityDetail(name, block.arguments) };
+					phase = "toolcall";
 				} else if (etType === "toolcall_end") {
 					const call = record(et.toolCall);
-					const name = typeof call.name === "string" ? call.name : "tool";
+					const name = typeof call.name === "string" ? call.name : "工具";
 					pendingTool = { name, detail: toolActivityDetail(name, call.arguments) };
 					phase = "toolcall";
 				} else if (etType.startsWith("text")) {
@@ -392,10 +420,21 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 				refreshActivity();
 				break;
 			}
-			case "message_end":
+			case "message_end": {
+				const text = cumulativeText(event.message);
+				if (text && text !== latestAnswer) {
+					latestAnswer = text;
+					deps.sink.onAnswer(text);
+				}
+				const thinking = cumulativeThinking(event.message);
+				if (thinking !== latestThinking) {
+					latestThinking = thinking;
+					deps.sink.onThinking(thinking);
+				}
 				phase = "";
 				refreshActivity();
 				break;
+			}
 			case "turn_start":
 				phase = "thinking";
 				replaceTransientActivity();

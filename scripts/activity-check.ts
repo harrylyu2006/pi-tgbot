@@ -1,4 +1,4 @@
-import { toolActivityDetail, createEventRouter } from "../src/agent/events.ts";
+import { cumulativeThinking, toolActivityDetail, createEventRouter } from "../src/agent/events.ts";
 import { LiveMessage } from "../src/telegram/live.ts";
 
 let failures = 0;
@@ -21,6 +21,7 @@ function checkNotContains(name: string, got: string, forbidden: string): void {
 interface RouterHarness {
 	send(type: string, extra?: Record<string, unknown>): void;
 	activities: string[];
+	thinking: string[];
 	started: string[];
 	order: string[];
 }
@@ -28,6 +29,7 @@ interface RouterHarness {
 /** A wired router with a recording sink, for lifecycle-level assertions. */
 function harness(): RouterHarness {
 	const activities: string[] = [];
+	const thinking: string[] = [];
 	const started: string[] = [];
 	const order: string[] = [];
 	const gen = 1;
@@ -37,6 +39,7 @@ function harness(): RouterHarness {
 		sink: {
 			onStart: noop,
 			onAnswer: noop,
+			onThinking: (text: string) => thinking.push(text),
 			onActivity: (line: string) => {
 				activities.push(line);
 				order.push("activity");
@@ -54,6 +57,7 @@ function harness(): RouterHarness {
 	});
 	return {
 		activities,
+		thinking,
 		started,
 		order,
 		send: (type: string, extra: Record<string, unknown> = {}) => route(gen, { type, ...extra }),
@@ -137,14 +141,33 @@ console.log("并发工具按 toolCallId 关联：");
 	h.send("tool_execution_end", { toolCallId: "t2", toolName: "grep", result: {}, isError: false });
 }
 
-console.log("模型阶段（思考/回复，不泄露推理内容）：");
+console.log("模型阶段（思考/工具参数/回复）：");
 {
 	const h = harness();
 	h.send("agent_start");
-	h.send("message_update", { message: { content: [] }, assistantMessageEvent: { type: "thinking_start" } });
+	h.send("message_update", {
+		message: { content: [{ type: "thinking", thinking: "先检查配置" }] },
+		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "先检查配置" },
+	});
 	const thinking = h.activities[h.activities.length - 1] ?? "";
 	checkContains("思考阶段可见", thinking, "💭 思考中…");
-	checkNotContains("不显示链式推理内容", thinking, "reasoning");
+	check("真实思考内容转发到 sink", h.thinking[h.thinking.length - 1] ?? "", "先检查配置");
+	check("累计思考提取多块内容", cumulativeThinking({ content: [{ type: "thinking", thinking: "A" }, { type: "text", text: "x" }, { type: "thinking", thinking: "B" }] }), "AB");
+	check("不转发 redacted thinking", cumulativeThinking({ content: [{ type: "thinking", thinking: "opaque", redacted: true }] }), "");
+	h.send("message_end", { message: { content: [{ type: "thinking", thinking: "最终完整思考" }] } });
+	check("message_end 补抓非流式思考", h.thinking[h.thinking.length - 1] ?? "", "最终完整思考");
+	h.send("message_update", {
+		message: { content: [{ type: "toolCall", id: "planned", name: "bash", arguments: { command: "npm" } }] },
+		assistantMessageEvent: {
+			type: "toolcall_delta",
+			contentIndex: 0,
+			delta: " test",
+			partial: { content: [{ type: "toolCall", id: "planned", name: "bash", arguments: { command: "npm test" } }] },
+		},
+	});
+	const building = h.activities[h.activities.length - 1] ?? "";
+	checkContains("工具参数生成中立即显示具体工具", building, "🔧 即将调用 bash");
+	checkContains("工具参数生成中显示当前命令", building, "npm test");
 	h.send("message_update", {
 		message: { content: [] },
 		assistantMessageEvent: {
@@ -199,7 +222,7 @@ console.log("活动块整体封顶：");
 	checkNotContains("块内条目明细无换行溢出", busy, "a │ b\nc");
 }
 
-console.log("出站脱敏：");
+console.log("出站脱敏与思考渲染：");
 const live = new LiveMessage({} as never, {} as never, {
 	chatId: 1,
 	editThrottleMs: 1000,
@@ -211,6 +234,40 @@ live.setActivity("bash\ntoken=" + "1234567890:" + "AAFAKEfaketokenfortestingonly
 const activity = (live as unknown as { activity: string }).activity;
 checkContains("活动命令出站脱敏", activity, "REDACTED");
 checkNotContains("脱敏不泄露 token", activity, "AAFAKE");
+live.setThinking("先读取 `/root/app.ts`，然后检查配置");
+const composed = (live as unknown as { compose(): string }).compose();
+checkContains("思考过程显示独立标题", composed, "💭 思考过程");
+checkContains("思考过程使用可折叠引用", composed, "<blockquote expandable>");
+checkContains("思考过程保留 Markdown 代码格式", composed, "<code>/root/app.ts</code>");
+
+console.log("编辑上限不冻结真实内容：");
+{
+	const edits: string[] = [];
+	const fakeApi = {
+		sendMessage: async () => ({ message_id: 10 }),
+		editMessageText: async (params: { text: string }) => {
+			edits.push(params.text);
+			return {};
+		},
+	};
+	const capped = new LiveMessage(fakeApi as never, { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as never, {
+		chatId: 1,
+		editThrottleMs: 0,
+		maxChars: 3800,
+		maxEditsPerTurn: 0,
+		notifyAfterMs: 30_000,
+	});
+	await capped.begin();
+	capped.setActivity("普通状态变更");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	check("超过软上限后跳过纯状态编辑", String(edits.length), "0");
+	capped.setThinking("仍在生成新的思考 token");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	check("超过软上限后仍发送真实思考内容", String(edits.length), "1");
+	capped.setAnswer("正文 token");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	check("超过软上限后仍发送真实正文内容", String(edits.length), "2");
+}
 
 console.log(failures === 0 ? "\nACTIVITY CHECK PASSED" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

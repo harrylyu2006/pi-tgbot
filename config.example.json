@@ -10,7 +10,7 @@
   "render": {
     "editThrottleMs": 2500,
     "maxChars": 3800,
-    "maxEditsPerTurn": 120,
+    "maxEditsPerTurn": 600,
     "notifyAfterMs": 30000
   },
   "tools": {

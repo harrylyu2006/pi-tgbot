@@ -205,6 +205,7 @@ const route = createEventRouter({
 	sink: {
 		onStart: () => {},
 		onAnswer: (text) => dispatcher.current?.setAnswer(text),
+		onThinking: (text) => dispatcher.current?.setThinking(text),
 		onActivity: (line) => dispatcher.current?.setActivity(line),
 		onSettled: (finalText) => {
 			const live = dispatcher.current;

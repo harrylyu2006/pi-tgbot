@@ -40,10 +40,12 @@ export function closeOpenTags(html: string): string {
 		const name = (match[2] ?? "").toLowerCase();
 		if (!ALLOWED.has(name)) continue;
 		if (closing) {
-			// Pop to the matching opener; unbalanced closers are ignored rather
-			// than trusted, since a mismatch means our compiler has a bug.
 			const idx = stack.lastIndexOf(name);
-			if (idx >= 0) stack.splice(idx, 1);
+			if (idx < 0) continue;
+			// The requested close also implicitly closes any inner formatting. This
+			// mirrors HTML parsing and prevents stale nested tags from being appended
+			// after an already-closed outer blockquote/pre block.
+			stack.splice(idx);
 		} else {
 			stack.push(name);
 		}

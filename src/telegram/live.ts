@@ -61,7 +61,10 @@ export class LiveMessage {
 	private messageId: number | null = null;
 	private adopted = false;
 	private activity = "";
+	private thinking = "";
 	private answer = "";
+	private contentRevision = 0;
+	private sentContentRevision = 0;
 	private lastSentBody: string | null = null;
 	private lastEditAt = 0;
 	private editCount = 0;
@@ -117,6 +120,20 @@ export class LiveMessage {
 		this.schedule();
 	}
 
+	/** Provider-visible thinking is streamed separately from the final answer. */
+	setThinking(text: string): void {
+		if (this.closed) return;
+		const { text: safe, count } = redactOutbound(text);
+		if (count > 0 && !this.redactionNoted) {
+			this.redactionNoted = true;
+			this.log.info({ msg: "redacted secrets from outbound thinking", rules: count });
+		}
+		if (safe === this.thinking) return;
+		this.thinking = safe;
+		this.contentRevision++;
+		this.schedule();
+	}
+
 	/** `text` is the cumulative answer in the model's markdown, never a delta. */
 	setAnswer(text: string): void {
 		if (this.closed) return;
@@ -127,7 +144,9 @@ export class LiveMessage {
 			this.redactionNoted = true;
 			this.log.info({ msg: "redacted secrets from outbound message", rules: count });
 		}
+		if (safe === this.answer) return;
 		this.answer = safe;
+		this.contentRevision++;
 		this.schedule();
 	}
 
@@ -135,6 +154,11 @@ export class LiveMessage {
 	private compose(): string {
 		const blocks: string[] = [];
 		if (this.activity) blocks.push(`<i>${esc(this.activity)}</i>`);
+		if (this.thinking) {
+			const thinkingBlocks = compileBlocks(this.thinking);
+			blocks.push(`<b>💭 思考过程</b>`);
+			blocks.push(...thinkingBlocks.map((block) => `<blockquote expandable>${block}</blockquote>`));
+		}
 		if (this.answer) blocks.push(...compileBlocks(this.answer));
 		if (blocks.length === 0) return esc("⏳ …");
 		return closeOpenTags(packTail(blocks, this.opts.maxChars));
@@ -194,7 +218,8 @@ export class LiveMessage {
 			this.pending = true;
 			return;
 		}
-		if (this.editCount >= this.opts.maxEditsPerTurn) return;
+		const meaningfulContentPending = this.contentRevision > this.sentContentRevision;
+		if (this.editCount >= this.opts.maxEditsPerTurn && !meaningfulContentPending) return;
 		if (Date.now() < this.suppressedUntil) return;
 
 		const body = this.compose();
@@ -203,6 +228,7 @@ export class LiveMessage {
 		this.inFlight = true;
 		try {
 			await this.edit(body);
+			this.sentContentRevision = this.contentRevision;
 			this.lastEditAt = Date.now();
 			this.editCount++;
 		} catch (err) {
