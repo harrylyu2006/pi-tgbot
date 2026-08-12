@@ -159,7 +159,7 @@ export class TelegramUI implements ExtensionUIContext {
 	}
 	pasteToEditor(): void {}
 
-	/** TUI-only surface used by pi-subagents; safe no-ops for headless Telegram. */
+	/** TUI-only surface; safe no-ops for headless Telegram. */
 	setToolsExpanded(): void {}
 	getToolsExpanded(): boolean {
 		return false;
@@ -168,7 +168,7 @@ export class TelegramUI implements ExtensionUIContext {
 	getEditorText(): string {
 		return "";
 	}
-	/** No editor over Telegram — subagents admin flows that open an editor degrade to fail-closed. */
+	/** No editor over Telegram; editor-dependent flows degrade to fail-closed. */
 	async editor(): Promise<string | undefined> {
 		return undefined;
 	}

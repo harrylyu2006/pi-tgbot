@@ -30,6 +30,20 @@ export interface PanelView {
 	markup: ReturnType<typeof keyboard>;
 }
 
+/**
+ * Context usage is null-bearing: a session whose turns all failed (or that has
+ * not run one yet) reports null tokens. The tokens view already guarded this;
+ * the status view did not, so `/start` threw a TypeError and sent nothing —
+ * indistinguishable from the daemon being down.
+ */
+function num(v: unknown): string {
+	return typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US") : "—";
+}
+
+function pct(v: unknown): string {
+	return typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(2)}%` : "—";
+}
+
 function fmtDuration(ms: number): string {
 	const s = Math.floor(ms / 1000);
 	if (s < 60) return `${s}秒`;
@@ -158,7 +172,7 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 		lines.push(
 			"",
 			"<b>当前上下文</b>",
-			`${usage.tokens.toLocaleString("en-US")} / ${usage.contextWindow.toLocaleString("en-US")}（${usage.percent.toFixed(2)}%）`,
+			`${num(usage?.tokens)} / ${num(usage?.contextWindow)}（${pct(usage?.percent)}）`,
 			"",
 			`消息：用户 ${stats.userMessages ?? 0} · 助手 ${stats.assistantMessages ?? 0} · 工具 ${stats.toolCalls ?? 0}`,
 			`会话：<code>${esc(session.sessionId.slice(0, 8))}</code> · 第 ${gen} 代`,
@@ -206,7 +220,7 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 		"",
 		`模型：<code>${esc(`${session.model.provider}/${session.model.id}`)}</code>${spec ? "" : " <i>(来自 settings.json)</i>"}`,
 		`思考：<code>${esc(session.supportsThinking() ? session.thinkingLevel : "不支持")}</code>`,
-		`上下文：${usage.tokens.toLocaleString("en-US")} / ${usage.contextWindow.toLocaleString("en-US")}（${usage.percent.toFixed(2)}%）`,
+		`上下文：${num(usage?.tokens)} / ${num(usage?.contextWindow)}（${pct(usage?.percent)}）`,
 		`累计 token：${totalTokens}`,
 		`会话：<code>${esc(session.sessionId.slice(0, 8))}</code> · 第 ${gen} 代`,
 	];

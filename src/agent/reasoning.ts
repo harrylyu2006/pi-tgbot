@@ -74,7 +74,17 @@ function inferThinkingLevelMap(model: ModelLike): InferredThinking | undefined {
 
 	// GPT-5.6 officially supports none/low/medium/high/xhigh/max. It does not
 	// support the older GPT-5 "minimal" label. Pi's "off" maps to wire "none".
-	if (/gpt56/.test(idName)) return { map: { off: "none", minimal: null, xhigh: "xhigh", max: "max" } };
+	//
+	// The Codex endpoint is narrower than the model: its request schema validates
+	// reasoning_effort against low|medium|high|xhigh and 400s on "max", so every
+	// turn fails while the panel keeps offering the level. Model capability and
+	// endpoint capability are separate facts and are kept separate here.
+	if (/gpt56/.test(idName)) {
+		const codexEndpoint = provider === "codex" || compact(model.baseUrl).includes("backendapi");
+		// Explicit on both branches: an absent key falls back to the SDK default
+		// rather than preserving "max", so it must be written either way.
+		return { map: { off: "none", minimal: null, xhigh: "xhigh", max: codexEndpoint ? null : "max" } };
+	}
 	// GPT-5.2 through 5.5 support none/low/medium/high/xhigh, again no minimal.
 	// GPT-5.5 Pro is narrower: medium/high/xhigh only.
 	if (/gpt55pro/.test(idName)) {
