@@ -30,6 +30,7 @@ interface PiSession {
 	subscribe(listener: (event: any) => void): () => void;
 	bindExtensions(bindings: Record<string, unknown>): Promise<void>;
 	prompt(text: string, options?: Record<string, unknown>): Promise<void>;
+	steer(text: string): Promise<void>;
 	abort(): Promise<void>;
 	dispose(): void;
 	readonly extensionRunner: {
@@ -47,6 +48,7 @@ interface PiSession {
 	readonly thinkingLevel: string;
 	readonly sessionId: string;
 	readonly isIdle: boolean;
+	readonly isStreaming: boolean;
 	readonly pendingMessageCount: number;
 	readonly isCompacting: boolean;
 }

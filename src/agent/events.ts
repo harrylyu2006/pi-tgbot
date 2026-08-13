@@ -320,7 +320,7 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 			parts.push(`🔧 ${toolsDone} 个工具 · ${elapsed}s`);
 		}
 
-		if (queuedSteering.length > 0) parts.push(`⏭ 队列（${queuedSteering.length}）：${preview(queuedSteering[0])}`);
+		if (queuedSteering.length > 0) parts.push(`📨 新消息（${queuedSteering.length}）：${preview(queuedSteering[0])}`);
 		if (queuedFollowUp.length > 0) parts.push(`📌 后续：${preview(queuedFollowUp[0])}`);
 
 		if (parts.length === 0) return "";

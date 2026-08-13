@@ -18,6 +18,7 @@ import { LiveMessage } from "./telegram/live.ts";
 import { AgentHost } from "./agent/host.ts";
 import { createEventRouter } from "./agent/events.ts";
 import { IdleWatchdog } from "./agent/idle-watchdog.ts";
+import { steerIfStreaming } from "./agent/incoming.ts";
 import { AuditLog } from "./agent/audit.ts";
 import { State } from "./state.ts";
 import { Files } from "./telegram/files.ts";
@@ -63,7 +64,11 @@ const telegramUI: TelegramUI = new TelegramUI({
 	generation: (): number => host.generation,
 });
 
-/** One turn at a time; queued prompts wait their turn in arrival order. */
+/**
+ * One active Pi run at a time. New Telegram messages steer that active run at
+ * its next model boundary; this local FIFO remains only as a race fallback for
+ * messages that arrive while a run is settling or another prompt is starting.
+ */
 class Dispatcher {
 	private readonly queue: Array<{ text: string; chatId: number; replyTo: number; placeholderId?: number }> = [];
 	private running = false;
@@ -106,26 +111,41 @@ class Dispatcher {
 
 	enqueue(item: { text: string; chatId: number; replyTo: number }): void {
 		this.noteActivity();
-		const queued: { text: string; chatId: number; replyTo: number; placeholderId?: number } = { ...item };
-		this.queue.push(queued);
 		if (this.running) {
-			// Say so immediately. Silence here looks identical to "the bot did not
-			// receive it", and the operator resends — which just queues a third turn.
-			const ahead = this.queue.length;
-			void api
-				.sendMessage({
-					chat_id: item.chatId,
-					text: `⏳ 已排队，前面还有 ${ahead} 个任务`,
-					reply_to_message_id: item.replyTo,
-				})
-				.then((msg) => {
-					queued.placeholderId = msg.message_id;
-				})
-				.catch(() => undefined);
-			log.info({ msg: "queued behind running turn", queueDepth: this.queue.length });
+			void this.deliverMidRun(item);
 			return;
 		}
+		this.queue.push({ ...item });
 		void this.pump();
+	}
+
+	private async deliverMidRun(item: { text: string; chatId: number; replyTo: number }): Promise<void> {
+		try {
+			const session = this.host.session;
+			if (await steerIfStreaming(session, item.text)) {
+				log.info({ msg: "steered active turn", promptLen: item.text.length, pending: session.pendingMessageCount });
+				return;
+			}
+		} catch (err) {
+			// The run can settle between the isStreaming check and steer(). Falling
+			// back to the local FIFO is lossless; only unexpected failures are logged.
+			log.warn({ msg: "mid-run steering raced, using fallback queue", ...errFields(err) });
+		}
+
+		const queued: { text: string; chatId: number; replyTo: number; placeholderId?: number } = { ...item };
+		this.queue.push(queued);
+		void api
+			.sendMessage({
+				chat_id: item.chatId,
+				text: `⏳ 当前一轮刚结束，已作为下一条任务排队`,
+				reply_to_message_id: item.replyTo,
+			})
+			.then((msg) => {
+				queued.placeholderId = msg.message_id;
+			})
+			.catch(() => undefined);
+		log.info({ msg: "queued after steering race", queueDepth: this.queue.length });
+		if (!this.running) void this.pump();
 	}
 
 	/** Called by the event router when the session reports agent_settled. */

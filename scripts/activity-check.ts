@@ -199,13 +199,13 @@ console.log("模型阶段（思考/工具参数/回复）：");
 	checkNotContains("正文出现后不再占用活动行", responding, "💭 思考中…");
 }
 
-console.log("队列预览：");
+console.log("运行中消息预览：");
 {
 	const h = harness();
 	h.send("agent_start");
 	h.send("queue_update", { steering: ["检查所有服务器的磁盘占用"], followUp: ["把结果整理成表格"] });
 	const queued = h.activities[h.activities.length - 1] ?? "";
-	checkContains("steering 队列预览", queued, "⏭ 队列（1）：检查所有服务器的磁盘占用");
+	checkContains("steering 新消息预览", queued, "📨 新消息（1）：检查所有服务器的磁盘占用");
 	checkContains("followUp 队列预览", queued, "📌 后续：把结果整理成表格");
 }
 
