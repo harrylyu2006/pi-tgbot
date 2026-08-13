@@ -32,6 +32,10 @@ interface PiSession {
 	prompt(text: string, options?: Record<string, unknown>): Promise<void>;
 	abort(): Promise<void>;
 	dispose(): void;
+	readonly extensionRunner: {
+		hasHandlers(eventType: string): boolean;
+		emit(event: Record<string, unknown>): Promise<unknown>;
+	};
 	getAllTools(): Array<{ name: string }>;
 	getActiveToolNames(): string[];
 	setActiveToolsByName(names: string[]): void;
@@ -313,6 +317,35 @@ export class AgentHost {
 		return true;
 	}
 
+	/**
+	 * Tear down one SDK session in lifecycle order.
+	 *
+	 * AgentSession.dispose() only invalidates the extension runtime; it does not
+	 * emit session_shutdown. Emitting it first lets MCP/web extensions close
+	 * session-scoped work without touching an already-stale context.
+	 */
+	private async teardownSession(session: PiSession, reason: "new" | "quit"): Promise<void> {
+		try {
+			await Promise.race([session.abort(), new Promise<void>((resolve) => setTimeout(resolve, 10_000).unref?.())]);
+		} catch (err) {
+			this.log.warn({ msg: `abort during ${reason} failed`, ...errFields(err) });
+		}
+
+		try {
+			if (session.extensionRunner.hasHandlers("session_shutdown")) {
+				await session.extensionRunner.emit({ type: "session_shutdown", reason });
+			}
+		} catch (err) {
+			this.log.warn({ msg: `extension shutdown during ${reason} failed`, ...errFields(err) });
+		}
+
+		try {
+			session.dispose();
+		} catch (err) {
+			this.log.warn({ msg: `dispose during ${reason} failed`, ...errFields(err) });
+		}
+	}
+
 	/** `/new`: drop context, but preserve the effective model and reasoning. */
 	async reset(): Promise<void> {
 		const old = this.sessionValue;
@@ -325,26 +358,21 @@ export class AgentHost {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
 		this.sessionValue = null;
-		try {
-			old?.dispose();
-		} catch (err) {
-			this.log.warn({ msg: "dispose during reset failed", ...errFields(err) });
-		}
+		if (old) await this.teardownSession(old, "new");
+
+		// DefaultResourceLoader owns a single shared extension runtime. Disposing
+		// the old AgentSession invalidates that runtime, so reusing the loader as-is
+		// makes every extension context in the replacement session stale. Reloading
+		// here creates fresh extension instances/runtime before generation N+1 binds.
+		await this.loader.reload();
 		await this.createSession(true);
 	}
 
 	async stop(): Promise<void> {
-		try {
-			await Promise.race([this.sessionValue?.abort() ?? Promise.resolve(), new Promise((r) => setTimeout(r, 10_000).unref?.())]);
-		} catch (err) {
-			this.log.warn({ msg: "abort during shutdown failed", ...errFields(err) });
-		}
+		const session = this.sessionValue;
 		this.unsubscribe?.();
-		try {
-			this.sessionValue?.dispose();
-		} catch {
-			/* shutting down anyway */
-		}
+		this.unsubscribe = null;
 		this.sessionValue = null;
+		if (session) await this.teardownSession(session, "quit");
 	}
 }
