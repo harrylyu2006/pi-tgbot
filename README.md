@@ -8,9 +8,9 @@
 
 ## 主要功能
 
-- **Telegram 实时输出**：模型生成正文时持续编辑同一条消息，不必等整轮任务结束。
+- **Telegram 实时输出**：模型生成正文时持续编辑同一条消息，不必等整轮任务结束；SDK 发出的用户消息事件不会被误当成助手正文，因此不会在“思考中”下方重复显示本轮 Prompt。
 - **实时运行状态**：显示思考、准备调用工具、工具名称、参数摘要、执行进度、重试和上下文压缩等状态。
-- **可见思考内容**：当模型 API 返回可展示的 thinking/reasoning 内容时，会在独立的可折叠引用块中实时显示；若思考开头只是原样复述本轮 Prompt，则仅隐藏这段开头复述，后续思考照常显示；被 provider 标记为 redacted 的内容不会展示。
+- **可见思考内容**：当模型 API 返回可展示的 thinking/reasoning 内容时，会在独立的可折叠引用块中实时显示；如果 provider 返回的思考内容本身以本轮 Prompt 的原文开头，只移除这段开头复述，后续思考照常显示；被 provider 标记为 redacted 的内容不会展示。
 - **长任务不会“假死”**：普通状态更新达到软上限后可以降频，但新的思考内容和正文仍会继续更新。
 - **可靠的最终送达**：较长任务完成后会另发新消息触发 Telegram 通知；超长回答会按 Telegram 限制安全分段。
 - **持久会话**：服务重启后恢复最近的专用会话；模型和思考等级也会保留。
@@ -79,7 +79,7 @@ Telegram Bot API
         │              ├── 内置与自定义工具
         │              └── 独立 session 目录
         ▼
- Event Router ── 正文 / 思考 / 工具 / 生命周期事件
+ Event Router ── 角色过滤 / 正文 / 思考 / 工具 / 生命周期事件
         │
         ▼
  LiveMessage ── 脱敏 → Markdown/HTML → 限速/分段
@@ -92,12 +92,14 @@ Telegram Bot API
 
 - `src/main.ts`：进程生命周期、任务队列、命令、回调、附件和退出流程。
 - `src/agent/host.ts`：pi SDK 初始化、会话恢复、模型/思考等级和扩展加载。
-- `src/agent/events.ts`：把 pi 事件流转换成 Telegram 中可见的正文、思考和工具状态。
+- `src/agent/events.ts`：过滤事件角色，并把 pi 事件流转换成 Telegram 中可见的正文、思考和工具状态。
 - `src/agent/reasoning.ts`：模型家族的思考档位与 provider 请求兼容。
-- `src/telegram/poller.ts`：Telegram 长轮询、用户限制、冲突恢复和退避。
-- `src/telegram/live.ts`：实时消息编辑、限速、思考块、最终通知和分段。
+- `src/agent/audit.ts`：记录不含原始参数和结果的工具审计元数据。
+- `src/agent/outbox.ts`：检查出站文件真实路径、允许根目录和符号链接。
+- `src/telegram/poller.ts`：Telegram 长轮询、私聊/用户限制、冲突恢复和退避。
+- `src/telegram/live.ts`：实时消息编辑、限速、Prompt 复述过滤、思考块、最终通知和分段。
 - `src/telegram/markdown.ts`、`html.ts`：把流式 Markdown 编译成 Telegram 可接受的闭合 HTML。
-- `src/telegram/files.ts`：附件下载、文件名处理、保留期限和出站目录限制。
+- `src/telegram/files.ts`：附件下载、文件名处理和保留期限。
 - `src/ui/panel.ts`：Telegram 操作面板。
 - `src/ui/telegram-ui.ts`：把扩展交互映射为 Telegram 按钮。
 
@@ -220,7 +222,7 @@ journalctl -u pi-tg -f
 
 ## 配置说明
 
-程序会拒绝未知配置字段，避免拼写错误被静默忽略。完整示例见 `config.example.json`。
+程序会拒绝未知配置字段，避免拼写错误被静默忽略；配置文件不能对组用户或其他用户开放读取，路径项必须使用绝对路径，数值项也会检查合理范围。完整示例见 `config.example.json`。
 
 ### 必填项
 
@@ -307,9 +309,10 @@ journalctl -u pi-tg -f
 项目重点不是安全拦截，但仍保留一些避免误操作或意外公开的基本机制：
 
 - 非 `allowedUserId` 的更新不会交给 Agent，操作者在群聊中的更新也会被拒绝；
+- SDK 的用户消息事件不会进入助手正文渲染，避免实时消息重复显示 Prompt；
 - Bot 的 callback 带进程和 session generation 标识，旧按钮不能操作新会话；
-- `config.json`、凭证、模型目录、session、日志、inbox 和 `web-search.json` 默认被 Git 忽略；
-- journald 不记录完整 prompt 和模型正文；
+- `config.json`、凭证、模型目录、session、日志、inbox、本地审计报告和 `web-search.json` 默认被 Git 忽略；
+- journald 不记录完整 Prompt、模型正文、聊天/消息/session ID、用户名、模型名、私有路径或原始错误正文；
 - 发往 Telegram 的模型输出会尝试遮盖常见 API Key、Bot Token、JWT、私钥块和带密码的数据库 URL；
 - 工具审计不保存原始参数或工具结果，只保留参数字节数和摘要哈希；
 - `publication-check` 检查常见敏感文件名、凭证格式，并默认拒绝图片资产（图片需先人工隐私审查）；
@@ -335,12 +338,16 @@ npm test
 - TypeScript 类型检查；
 - 流式 Markdown/Telegram HTML 前缀和标签闭合；
 - 出站脱敏及误报样例；
-- Telegram UI 超时/失败行为；
-- 实时工具状态、思考渲染和软编辑上限；
+- Telegram UI 超时、失败和 AbortSignal 中断行为；
+- 实时工具状态、用户消息角色过滤、Prompt 复述过滤、思考渲染和软编辑上限；
+- 超长单行文字/代码的完整分段；
+- 单用户私聊边界与群聊拒绝；
+- 危险配置、配置文件权限、出站符号链接和审计日志明文回归测试；
+- 流式 multipart 文件上传及文件名处理；
 - 模型思考等级与 provider payload 兼容；
 - 状态恢复、滑动空闲超时和操作面板；
 - 内置 `pi-web-access` 加载及四类能力注册；
-- 公开发布文件与常见凭证扫描。
+- 公开发布文件、图片资产和常见凭证扫描。
 
 可选的真实 SDK 探针会创建隔离 session 并实际请求当前模型：
 
@@ -426,6 +433,7 @@ npm test
 
 - Telegram polling 不能等待 Agent 任务结束；
 - 只有 `agent_settled` 才能释放 dispatcher；
+- 用户角色的消息事件不能进入助手正文或思考渲染；
 - 旧 session generation 的事件不能渲染到新会话；
 - 每一个流式前缀都必须生成结构闭合的 Telegram HTML；
 - 工具参数、工具输出和思考内容的实时展示必须有长度边界；
