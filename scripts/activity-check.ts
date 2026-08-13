@@ -21,6 +21,7 @@ function checkNotContains(name: string, got: string, forbidden: string): void {
 interface RouterHarness {
 	send(type: string, extra?: Record<string, unknown>): void;
 	activities: string[];
+	answers: string[];
 	thinking: string[];
 	started: string[];
 	order: string[];
@@ -29,6 +30,7 @@ interface RouterHarness {
 /** A wired router with a recording sink, for lifecycle-level assertions. */
 function harness(): RouterHarness {
 	const activities: string[] = [];
+	const answers: string[] = [];
 	const thinking: string[] = [];
 	const started: string[] = [];
 	const order: string[] = [];
@@ -38,7 +40,7 @@ function harness(): RouterHarness {
 		log: { debug: noop, info: noop, warn: noop, error: noop, child: () => ({ debug: noop, info: noop, warn: noop, error: noop, child: () => ({} as never) }) },
 		sink: {
 			onStart: noop,
-			onAnswer: noop,
+			onAnswer: (text: string) => answers.push(text),
 			onThinking: (text: string) => thinking.push(text),
 			onActivity: (line: string) => {
 				activities.push(line);
@@ -57,6 +59,7 @@ function harness(): RouterHarness {
 	});
 	return {
 		activities,
+		answers,
 		thinking,
 		started,
 		order,
@@ -145,6 +148,18 @@ console.log("模型阶段（思考/工具参数/回复）：");
 {
 	const h = harness();
 	h.send("agent_start");
+	h.send("message_update", {
+		message: { role: "user", content: [{ type: "text", text: "现在重新检查一下然后推送到GitHub" }] },
+	});
+	h.send("message_end", {
+		message: { role: "user", content: [{ type: "text", text: "现在重新检查一下然后推送到GitHub" }] },
+	});
+	check("用户消息事件不会被当成回答复述", h.answers.join(""), "");
+	h.send("message_update", {
+		message: { role: "assistant", content: [{ type: "text", text: "开始检查" }] },
+		assistantMessageEvent: { type: "text_delta", delta: "开始检查" },
+	});
+	check("助手正文仍正常转发", h.answers[h.answers.length - 1] ?? "", "开始检查");
 	h.send("message_update", {
 		message: { content: [{ type: "thinking", thinking: "先检查配置" }] },
 		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "先检查配置" },

@@ -385,15 +385,21 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 				refreshActivity();
 				break;
 			case "message_update": {
-				const text = cumulativeText(event.message);
-				if (text && text !== latestAnswer) {
-					latestAnswer = text;
-					deps.sink.onAnswer(text);
-				}
-				const thinking = cumulativeThinking(event.message);
-				if (thinking !== latestThinking) {
-					latestThinking = thinking;
-					deps.sink.onThinking(thinking);
+				// The SDK emits message lifecycle events for the user's prompt too.
+				// Treating that text as an assistant answer makes the live Telegram
+				// bubble repeat the prompt underneath “思考中…”. Only assistant (or
+				// legacy role-less) messages may update answer/thinking output.
+				if (event.message?.role !== "user") {
+					const text = cumulativeText(event.message);
+					if (text && text !== latestAnswer) {
+						latestAnswer = text;
+						deps.sink.onAnswer(text);
+					}
+					const thinking = cumulativeThinking(event.message);
+					if (thinking !== latestThinking) {
+						latestThinking = thinking;
+						deps.sink.onThinking(thinking);
+					}
 				}
 				const et = event.assistantMessageEvent;
 				const etType = et && typeof et === "object" && typeof et.type === "string" ? et.type : "";
@@ -421,15 +427,17 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 				break;
 			}
 			case "message_end": {
-				const text = cumulativeText(event.message);
-				if (text && text !== latestAnswer) {
-					latestAnswer = text;
-					deps.sink.onAnswer(text);
-				}
-				const thinking = cumulativeThinking(event.message);
-				if (thinking !== latestThinking) {
-					latestThinking = thinking;
-					deps.sink.onThinking(thinking);
+				if (event.message?.role !== "user") {
+					const text = cumulativeText(event.message);
+					if (text && text !== latestAnswer) {
+						latestAnswer = text;
+						deps.sink.onAnswer(text);
+					}
+					const thinking = cumulativeThinking(event.message);
+					if (thinking !== latestThinking) {
+						latestThinking = thinking;
+						deps.sink.onThinking(thinking);
+					}
 				}
 				phase = "";
 				refreshActivity();
