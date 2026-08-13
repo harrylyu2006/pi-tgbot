@@ -71,7 +71,8 @@ export class State {
 				msg: "state loaded",
 				seen: this.seen.length,
 				interrupted: Boolean(this.interruptedValue),
-				agentPreferences: this.agentPreferencesValue,
+				hasModelPreference: Boolean(this.agentPreferencesValue.model),
+				hasThinkingPreference: Boolean(this.agentPreferencesValue.thinkingLevel),
 			});
 		} catch {
 			// A missing or corrupt file is a first boot, not an error worth dying

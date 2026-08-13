@@ -11,8 +11,15 @@ import { closeOpenTags } from "./html.ts";
 
 const CODE_OPEN = /^<pre><code(?: class="language-[^"]*")?>/;
 
+function hardSplit(text: string, max: number): string[] {
+	const out: string[] = [];
+	for (let i = 0; i < text.length; i += max) out.push(text.slice(i, i + max));
+	return out;
+}
+
 function splitOversizedBlock(block: string, max: number): string[] {
 	const out: string[] = [];
+	if (max <= 0) return [""];
 
 	const codeMatch = CODE_OPEN.exec(block);
 	if (codeMatch && block.endsWith("</code></pre>")) {
@@ -20,33 +27,42 @@ function splitOversizedBlock(block: string, max: number): string[] {
 		const close = "</code></pre>";
 		const body = block.slice(open.length, block.length - close.length);
 		const budget = max - open.length - close.length;
-		let current: string[] = [];
-		let size = 0;
+		if (budget <= 0) return hardSplit(block, max);
+		let current = "";
+		const flush = (): void => {
+			if (!current) return;
+			out.push(open + current + close);
+			current = "";
+		};
 		for (const line of body.split("\n")) {
-			// A single line longer than the budget is hard-cut; nothing better is
-			// available and losing it silently would be worse.
-			const piece = line.length > budget ? line.slice(0, budget) : line;
-			if (size + piece.length + 1 > budget && current.length > 0) {
-				out.push(open + current.join("\n") + close);
-				current = [];
-				size = 0;
+			const pieces = line.length > budget ? hardSplit(line, budget) : [line];
+			for (const piece of pieces) {
+				const candidate = current ? `${current}\n${piece}` : piece;
+				if (candidate.length > budget) flush();
+				current = current ? `${current}\n${piece}` : piece;
+				if (current.length === budget) flush();
 			}
-			current.push(piece);
-			size += piece.length + 1;
 		}
-		if (current.length > 0) out.push(open + current.join("\n") + close);
+		flush();
 		return out;
 	}
 
-	// Non-code block: cut on line boundaries and let closeOpenTags repair the
-	// inline markup that straddles the cut.
+	// Non-code block: cut on line boundaries, then hard-split an individual
+	// oversized line. Every resulting chunk is bounded; no content is dropped.
 	let current = "";
 	for (const line of block.split("\n")) {
-		if (current.length + line.length + 1 > max && current.length > 0) {
-			out.push(closeOpenTags(current));
-			current = "";
+		const pieces = line.length > max ? hardSplit(line, max) : [line];
+		for (const piece of pieces) {
+			if (current.length + piece.length + (current ? 1 : 0) > max) {
+				out.push(closeOpenTags(current));
+				current = "";
+			}
+			current += (current ? "\n" : "") + piece;
+			if (current.length === max) {
+				out.push(closeOpenTags(current));
+				current = "";
+			}
 		}
-		current += (current ? "\n" : "") + line;
 	}
 	if (current) out.push(closeOpenTags(current));
 	return out;

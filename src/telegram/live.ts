@@ -26,6 +26,22 @@ import { compileBlocks } from "./markdown.ts";
 import { redactOutbound } from "./redact.ts";
 import { packBlocks, packTail } from "./chunk.ts";
 
+/**
+ * Some providers begin reasoning by echoing the prompt verbatim before adding
+ * any real analysis. Hide only that leading echo; subsequent thinking remains
+ * fully visible. Conservative by design: it strips only a long prefix with a
+ * clear delimiter or exact whole-text match, never a short coincidental phrase.
+ */
+export function stripLeadingPromptEcho(thinking: string, prompt: string): string {
+	const normalizedPrompt = prompt.trim();
+	if (normalizedPrompt.length < 12 || !thinking.startsWith(normalizedPrompt)) return thinking;
+	const rest = thinking.slice(normalizedPrompt.length);
+	if (!rest) return "";
+	const delimiter = /^(?:\r?\n){1,3}|^\s*(?:[-—:：]\s+|["”』」]\s*(?:\r?\n|$))/u.exec(rest);
+	if (!delimiter) return thinking;
+	return rest.slice(delimiter[0].length).replace(/^\s+/, "");
+}
+
 export interface LiveMessageOptions {
 	chatId: number;
 	replyTo?: number;
@@ -62,6 +78,7 @@ export class LiveMessage {
 	private adopted = false;
 	private activity = "";
 	private thinking = "";
+	private prompt = "";
 	private answer = "";
 	private contentRevision = 0;
 	private sentContentRevision = 0;
@@ -80,6 +97,12 @@ export class LiveMessage {
 		this.api = api;
 		this.log = log;
 		this.opts = opts;
+	}
+
+	/** Prompt used only to suppress a provider's initial verbatim reasoning echo. */
+	setPrompt(text: string): void {
+		if (this.closed) return;
+		this.prompt = text.trim();
 	}
 
 	async begin(placeholder = "⏳ …"): Promise<void> {
@@ -123,7 +146,8 @@ export class LiveMessage {
 	/** Provider-visible thinking is streamed separately from the final answer. */
 	setThinking(text: string): void {
 		if (this.closed) return;
-		const { text: safe, count } = redactOutbound(text);
+		const visible = stripLeadingPromptEcho(text, this.prompt);
+		const { text: safe, count } = redactOutbound(visible);
 		if (count > 0 && !this.redactionNoted) {
 			this.redactionNoted = true;
 			this.log.info({ msg: "redacted secrets from outbound thinking", rules: count });
@@ -198,7 +222,7 @@ export class LiveMessage {
 				// The compiler produced something Telegram rejected. Log enough to
 				// reproduce it, then deliver the content anyway — losing an answer
 				// to a rendering bug is the worst possible outcome.
-				this.log.error({ msg: "HTML rejected, falling back to plain text", sample: body.slice(0, 400) });
+				this.log.error({ msg: "HTML rejected, falling back to plain text", bodyChars: body.length });
 				const plain = stripTags(body).slice(0, this.opts.maxChars);
 				await this.api
 					.editMessageText({ chat_id: this.opts.chatId, message_id: this.messageId, text: plain })

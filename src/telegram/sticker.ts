@@ -13,7 +13,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { Logger } from "../log.ts";
 
@@ -80,7 +80,7 @@ function extractTgsText(filePath: string, log: Logger): string[] {
 	} catch (err) {
 		// Not gzip, not JSON, truncated, oversize — whatever it is, the model
 		// still gets the raw path and can investigate.
-		log.warn({ msg: "tgs text extraction failed, using raw path", file: basename(filePath), err: String(err) });
+		log.warn({ msg: "tgs text extraction failed, using raw path", errName: err instanceof Error ? err.name : typeof err });
 		return [];
 	}
 }
@@ -110,7 +110,7 @@ function extractFirstFrame(filePath: string, log: Logger): Promise<string | null
 			{ timeout: 20_000, windowsHide: true },
 			(err) => {
 				if (err) {
-					log.warn({ msg: "webm first-frame extraction failed, using raw path", file: basename(filePath), err: String(err) });
+					log.warn({ msg: "webm first-frame extraction failed, using raw path", errName: err.name });
 					resolve(null);
 					return;
 				}

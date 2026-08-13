@@ -52,7 +52,7 @@ export function createSendFileTool(binding: OutboxBinding): unknown {
 				return { content: [{ type: "text", text: "No active Telegram chat for this turn; cannot send." }], isError: true };
 			}
 			const result = await binding.files.send(chatId, params.path, params.caption);
-			binding.log.info({ msg: "telegram_send_file", path: params.path, ok: result.ok });
+			binding.log.info({ msg: "telegram_send_file", ok: result.ok });
 			return result.ok
 				? { content: [{ type: "text", text: result.detail }] }
 				: { content: [{ type: "text", text: result.detail }], isError: true };

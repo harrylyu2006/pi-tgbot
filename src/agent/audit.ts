@@ -7,16 +7,18 @@
  * the process, or takes the box down still leaves evidence of what was
  * attempted.
  *
- * Arguments are recorded, results are not: a `read` of a private key would
- * otherwise copy that key into a second file with a different retention policy.
- * Result size and error status are enough to reconstruct what happened.
+ * Raw arguments and results are never recorded. Commands, search queries,
+ * recipients and paths routinely contain private data; hashing a bounded,
+ * redacted serialization still lets the operator correlate repeated calls
+ * without creating a second plaintext transcript.
  */
 
-import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { errFields, redact, type Logger } from "../log.ts";
 
-const MAX_ARG_BYTES = 4096;
+const MAX_HASH_BYTES = 64 * 1024;
 
 export class AuditLog {
 	private readonly path: string;
@@ -30,9 +32,10 @@ export class AuditLog {
 
 	init(): void {
 		try {
-			mkdirSync(dirname(this.path), { recursive: true });
+			mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
 			closeSync(openSync(this.path, "a", 0o600));
-			this.log.info({ msg: "audit log ready", path: this.path });
+			chmodSync(this.path, 0o600);
+			this.log.info({ msg: "audit log ready" });
 		} catch (err) {
 			// Losing the audit log must not take the daemon down, but it must be
 			// loud: from here on the root-execution trade is unbacked.
@@ -48,25 +51,30 @@ export class AuditLog {
 		}
 	}
 
-	private static truncateArgs(args: unknown): { args: unknown; truncated: boolean } {
-		const redacted = redact(args);
-		const json = JSON.stringify(redacted) ?? "null";
-		if (json.length <= MAX_ARG_BYTES) return { args: redacted, truncated: false };
-		return { args: `${json.slice(0, MAX_ARG_BYTES)}…`, truncated: true };
+	private static summarizeArgs(args: unknown): { argBytes: number; argHash: string; hashTruncated: boolean } {
+		let json: string;
+		try {
+			json = JSON.stringify(redact(args)) ?? "null";
+		} catch {
+			json = "[unserializable]";
+		}
+		const bytes = Buffer.byteLength(json);
+		return {
+			argBytes: bytes,
+			argHash: createHash("sha256").update(Buffer.from(json).subarray(0, MAX_HASH_BYTES)).digest("hex"),
+			hashTruncated: bytes > MAX_HASH_BYTES,
+		};
 	}
 
 	/** Called on tool_execution_start, before the tool has run. */
-	start(ctx: { sessionId: string; generation: number; toolCallId: string; toolName: string; args: unknown }): void {
+	start(ctx: { generation: number; toolCallId: string; toolName: string; args: unknown }): void {
 		this.startedAt.set(ctx.toolCallId, Date.now());
-		const { args, truncated } = AuditLog.truncateArgs(ctx.args);
 		this.write({
 			phase: "start",
-			sessionId: ctx.sessionId,
 			gen: ctx.generation,
 			toolCallId: ctx.toolCallId,
 			tool: ctx.toolName,
-			args,
-			truncated,
+			...AuditLog.summarizeArgs(ctx.args),
 		});
 	}
 

@@ -46,6 +46,7 @@ const denyNames = [
 ];
 
 const ignoredFiles = new Set(["scripts/publication-check.mjs"]);
+const forbiddenExtensions = /\.(?:jpe?g|png|gif|webp|bmp|tiff?|heic)$/i;
 
 const patterns = [
   ["Telegram bot token", /\b\d{8,12}:[A-Za-z0-9_-]{30,}\b/g],
@@ -72,6 +73,7 @@ const allowedFixtureLines = new Set([
 const findings = [];
 for (const file of files) {
   if (ignoredFiles.has(file)) continue;
+  if (forbiddenExtensions.test(file)) findings.push(`${file}: image assets require explicit privacy review and are forbidden by default`);
   for (const rule of denyNames) {
     if (rule.test(file)) findings.push(`${file}: forbidden publication filename`);
   }

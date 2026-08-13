@@ -117,6 +117,20 @@ for (const [i, c] of bigChunks.entries()) {
 	if (!c.startsWith("<pre><code")) fail(`bigcode chunk ${i} lost its code wrapper`, c.slice(0, 80));
 }
 
+console.log("[3a] oversized single lines are preserved and bounded");
+{
+	const source = "x".repeat(MAX * 3 + 257);
+	const pieces = packBlocks(compileBlocks(source), MAX);
+	if (pieces.some((piece) => piece.length > MAX)) fail("plain single-line chunk exceeded max");
+	if (pieces.join("") !== source) fail("plain single-line content was lost");
+
+	const codeSource = "y".repeat(MAX * 3 + 257);
+	const codePieces = packBlocks(compileBlocks(`\`\`\`\n${codeSource}\n\`\`\``), MAX);
+	if (codePieces.some((piece) => piece.length > MAX)) fail("code single-line chunk exceeded max");
+	const recovered = codePieces.map((piece) => piece.replace(/^<pre><code>/, "").replace(/<\/code><\/pre>$/, "")).join("");
+	if (recovered !== codeSource) fail("code single-line content was lost");
+}
+
 console.log("[3b] nested tag repair");
 {
 	const malformedNested = '<blockquote expandable><b>thinking</blockquote>';

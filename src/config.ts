@@ -6,7 +6,8 @@
  * while looking configured. Failing loudly at boot beats discovering it later.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve, sep } from "node:path";
 import type { Level } from "./log.ts";
 
 export interface RenderConfig {
@@ -51,7 +52,7 @@ export interface Config {
 	};
 	/** Durable state (seen update ids, interrupted-turn marker). */
 	statePath: string;
-	/** Append-only tool audit log. */
+	/** Append-only tool metadata audit log; never stores raw args or results. */
 	auditPath: string;
 	/**
 	 * Extra pi extension paths to load.
@@ -113,18 +114,38 @@ function requireKeys(obj: Record<string, unknown>, allowed: string[], path: stri
 	}
 }
 
+function object(value: unknown, path: string): Record<string, unknown> {
+	if (value === undefined) return {};
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ConfigError(`${path} must be an object`);
+	}
+	return value as Record<string, unknown>;
+}
+
 function num(value: unknown, fallback: number, path: string): number {
 	if (value === undefined) return fallback;
-	if (typeof value !== "number" || !Number.isFinite(value)) throw new ConfigError(`${path} must be a number`);
+	if (typeof value !== "number" || !Number.isFinite(value)) throw new ConfigError(`${path} must be a finite number`);
 	return value;
 }
 
 function strArray(value: unknown, fallback: string[], path: string): string[] {
-	if (value === undefined) return fallback;
-	if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
-		throw new ConfigError(`${path} must be an array of strings`);
+	if (value === undefined) return [...fallback];
+	if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v.trim().length === 0)) {
+		throw new ConfigError(`${path} must be an array of non-empty strings`);
 	}
-	return value as string[];
+	return [...value] as string[];
+}
+
+function absolutePath(value: unknown, fallback: string, path: string): string {
+	const result = value === undefined ? fallback : value;
+	if (typeof result !== "string" || result.trim().length === 0 || !isAbsolute(result)) {
+		throw new ConfigError(`${path} must be a non-empty absolute path`);
+	}
+	return resolve(result);
+}
+
+function integerAtLeast(value: number, min: number, path: string): void {
+	if (!Number.isInteger(value) || value < min) throw new ConfigError(`${path} must be an integer >= ${min}`);
 }
 
 export function loadConfig(path: string): Config {
@@ -149,23 +170,34 @@ export function loadConfig(path: string): Config {
 	if (typeof o.botToken !== "string" || !/^\d{8,12}:[A-Za-z0-9_-]{30,}$/.test(o.botToken)) {
 		throw new ConfigError("botToken missing or not in <id>:<secret> form");
 	}
-	if (typeof o.allowedUserId !== "number" || !Number.isInteger(o.allowedUserId)) {
-		throw new ConfigError("allowedUserId must be an integer Telegram user id");
+	if (typeof o.allowedUserId !== "number" || !Number.isSafeInteger(o.allowedUserId) || o.allowedUserId <= 0) {
+		throw new ConfigError("allowedUserId must be a positive safe integer Telegram user id");
+	}
+	try {
+		const mode = statSync(path).mode & 0o777;
+		if ((mode & 0o077) !== 0) throw new ConfigError(`config file ${path} must not be accessible by group or others`);
+	} catch (err) {
+		if (err instanceof ConfigError) throw err;
+		throw new ConfigError(`cannot stat config ${path}: ${String(err)}`);
 	}
 
-	const renderRaw = (o.render ?? {}) as Record<string, unknown>;
+	const renderRaw = object(o.render, "render");
 	requireKeys(renderRaw, ["editThrottleMs", "maxChars", "maxEditsPerTurn", "notifyAfterMs"], "render.");
-	const toolsRaw = (o.tools ?? {}) as Record<string, unknown>;
+	const toolsRaw = object(o.tools, "tools");
 	requireKeys(toolsRaw, ["deny", "extraActive"], "tools.");
-	const turnRaw = (o.turn ?? {}) as Record<string, unknown>;
+	const turnRaw = object(o.turn, "turn");
 	requireKeys(turnRaw, ["idleTimeoutMs"], "turn.");
+	const coldStartRaw = object(o.coldStart, "coldStart");
+	requireKeys(coldStartRaw, ["staleSeconds"], "coldStart.");
+	const filesRaw = object(o.files, "files");
+	requireKeys(filesRaw, ["inboxDir", "outboxRoots", "maxDownloadMb", "maxUploadMb", "retentionDays"], "files.");
 
 	const cfg: Config = {
 		botToken: o.botToken,
 		allowedUserId: o.allowedUserId,
-		cwd: typeof o.cwd === "string" ? o.cwd : DEFAULTS.cwd,
-		agentDir: typeof o.agentDir === "string" ? o.agentDir : DEFAULTS.agentDir,
-		sessionDir: typeof o.sessionDir === "string" ? o.sessionDir : DEFAULTS.sessionDir,
+		cwd: absolutePath(o.cwd, DEFAULTS.cwd, "cwd"),
+		agentDir: absolutePath(o.agentDir, DEFAULTS.agentDir, "agentDir"),
+		sessionDir: absolutePath(o.sessionDir, DEFAULTS.sessionDir, "sessionDir"),
 		logLevel: (typeof o.logLevel === "string" ? o.logLevel : DEFAULTS.logLevel) as Level,
 		render: {
 			editThrottleMs: num(renderRaw.editThrottleMs, DEFAULTS.render.editThrottleMs, "render.editThrottleMs"),
@@ -178,26 +210,22 @@ export function loadConfig(path: string): Config {
 			extraActive: strArray(toolsRaw.extraActive, DEFAULTS.tools.extraActive, "tools.extraActive"),
 		},
 		turn: { idleTimeoutMs: num(turnRaw.idleTimeoutMs, DEFAULTS.turn.idleTimeoutMs, "turn.idleTimeoutMs") },
-		statePath: typeof o.statePath === "string" ? o.statePath : DEFAULTS.statePath,
-		auditPath: typeof o.auditPath === "string" ? o.auditPath : DEFAULTS.auditPath,
+		statePath: absolutePath(o.statePath, DEFAULTS.statePath, "statePath"),
+		auditPath: absolutePath(o.auditPath, DEFAULTS.auditPath, "auditPath"),
 		extensions: strArray(o.extensions, DEFAULTS.extensions, "extensions"),
 		coldStart: {
-			staleSeconds: num((o.coldStart as Record<string, unknown> | undefined)?.staleSeconds, DEFAULTS.coldStart.staleSeconds, "coldStart.staleSeconds"),
+			staleSeconds: num(coldStartRaw.staleSeconds, DEFAULTS.coldStart.staleSeconds, "coldStart.staleSeconds"),
 		},
-		files: (() => {
-			const f = (o.files ?? {}) as Record<string, unknown>;
-			requireKeys(f, ["inboxDir", "outboxRoots", "maxDownloadMb", "maxUploadMb", "retentionDays"], "files.");
-			return {
-				inboxDir: typeof f.inboxDir === "string" ? f.inboxDir : DEFAULTS.files.inboxDir,
-				outboxRoots: strArray(f.outboxRoots, DEFAULTS.files.outboxRoots, "files.outboxRoots"),
-				maxDownloadMb: num(f.maxDownloadMb, DEFAULTS.files.maxDownloadMb, "files.maxDownloadMb"),
-				maxUploadMb: num(f.maxUploadMb, DEFAULTS.files.maxUploadMb, "files.maxUploadMb"),
-				retentionDays: num(f.retentionDays, DEFAULTS.files.retentionDays, "files.retentionDays"),
-			};
-		})(),
+		files: {
+			inboxDir: absolutePath(filesRaw.inboxDir, DEFAULTS.files.inboxDir, "files.inboxDir"),
+			outboxRoots: strArray(filesRaw.outboxRoots, DEFAULTS.files.outboxRoots, "files.outboxRoots").map((path, index) =>
+				absolutePath(path, path, `files.outboxRoots[${index}]`),
+			),
+			maxDownloadMb: num(filesRaw.maxDownloadMb, DEFAULTS.files.maxDownloadMb, "files.maxDownloadMb"),
+			maxUploadMb: num(filesRaw.maxUploadMb, DEFAULTS.files.maxUploadMb, "files.maxUploadMb"),
+			retentionDays: num(filesRaw.retentionDays, DEFAULTS.files.retentionDays, "files.retentionDays"),
+		},
 	};
-
-	if (o.coldStart !== undefined) requireKeys(o.coldStart as Record<string, unknown>, ["staleSeconds"], "coldStart.");
 
 	if (o.model !== undefined) {
 		if (typeof o.model !== "string" || !o.model.includes("/")) {
@@ -207,11 +235,28 @@ export function loadConfig(path: string): Config {
 	}
 
 	if (!["debug", "info", "warn", "error"].includes(cfg.logLevel)) throw new ConfigError(`bad logLevel ${cfg.logLevel}`);
+	integerAtLeast(cfg.render.editThrottleMs, 1000, "render.editThrottleMs");
+	integerAtLeast(cfg.render.maxChars, 1, "render.maxChars");
 	if (cfg.render.maxChars > 4000) throw new ConfigError("render.maxChars must stay below the 4096 Telegram limit");
-	if (cfg.render.editThrottleMs < 1000) throw new ConfigError("render.editThrottleMs below 1000 will hit per-chat rate limits");
-	if (cfg.turn.idleTimeoutMs < 60_000) throw new ConfigError("turn.idleTimeoutMs must be at least 60000");
-	if (cfg.sessionDir.startsWith(`${cfg.agentDir}/sessions`)) {
-		throw new ConfigError("sessionDir must not live under the shared agent session dir — it would collide with interactive pi");
+	integerAtLeast(cfg.render.maxEditsPerTurn, 0, "render.maxEditsPerTurn");
+	integerAtLeast(cfg.render.notifyAfterMs, 0, "render.notifyAfterMs");
+	integerAtLeast(cfg.turn.idleTimeoutMs, 60_000, "turn.idleTimeoutMs");
+	integerAtLeast(cfg.coldStart.staleSeconds, 0, "coldStart.staleSeconds");
+	if (!(cfg.files.maxDownloadMb > 0)) throw new ConfigError("files.maxDownloadMb must be > 0");
+	if (!(cfg.files.maxUploadMb > 0)) throw new ConfigError("files.maxUploadMb must be > 0");
+	if (!(cfg.files.retentionDays > 0)) throw new ConfigError("files.retentionDays must be > 0");
+	if (cfg.files.outboxRoots.length === 0) throw new ConfigError("files.outboxRoots must not be empty");
+	if (cfg.files.outboxRoots.some((path) => path === resolve(sep))) {
+		throw new ConfigError("files.outboxRoots must not contain the filesystem root");
+	}
+	if (cfg.tools.deny.some((name) => name.includes("/") || name.includes("\\"))) {
+		throw new ConfigError("tools.deny entries must be tool names, not paths");
+	}
+	if (cfg.tools.extraActive.some((name) => name.includes("/") || name.includes("\\"))) {
+		throw new ConfigError("tools.extraActive entries must be tool names, not paths");
+	}
+	if (cfg.sessionDir === cfg.agentDir || cfg.sessionDir.startsWith(`${cfg.agentDir}${sep}`)) {
+		throw new ConfigError("sessionDir must not live under agentDir — it would collide with interactive pi state");
 	}
 
 	return cfg;

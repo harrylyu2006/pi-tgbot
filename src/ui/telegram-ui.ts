@@ -65,7 +65,8 @@ export class TelegramUI implements ExtensionUIContext {
 		return { ok: true, label: entry.label };
 	}
 
-	private async ask(title: string, message: string, options: string[], timeoutMs?: number): Promise<string | undefined> {
+	private async ask(title: string, message: string, options: string[], timeoutMs?: number, signal?: AbortSignal): Promise<string | undefined> {
+		if (signal?.aborted) return undefined;
 		const chatId = this.deps.currentChatId();
 		if (chatId === null) {
 			this.deps.log.warn({ msg: "ui dialog requested outside a turn, denying", title });
@@ -95,18 +96,35 @@ export class TelegramUI implements ExtensionUIContext {
 		}
 
 		return new Promise<string | undefined>((resolve) => {
+			let onAbort: (() => void) | undefined;
+			const finish = (choice: string | undefined): void => {
+				if (onAbort) signal?.removeEventListener("abort", onAbort);
+				resolve(choice);
+			};
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
 				this.deps.log.info({ msg: "ui dialog timed out, denying", title });
 				void this.deps.api
 					.editMessageText({ chat_id: chatId, message_id: messageId, text: `${text}\n\n<i>⏱ 超时未响应，已拒绝</i>`, parse_mode: "HTML" })
 					.catch(() => undefined);
-				resolve(undefined);
+				finish(undefined);
 			}, timeoutMs ?? this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 			// Not unref'd: a pending safety confirmation is load-bearing work. An
 			// unref'd timer would let the process exit with the question unanswered,
 			// which is the same class of bug as the poller's backoff sleep.
-			this.pending.set(id, { resolve, timer, messageId, chatId, label: title });
+			this.pending.set(id, { resolve: finish, timer, messageId, chatId, label: title });
+			if (signal) {
+				onAbort = () => {
+					if (!this.pending.delete(id)) return;
+					clearTimeout(timer);
+					void this.deps.api
+						.editMessageText({ chat_id: chatId, message_id: messageId, text: `${text}\n\n<i>⏹ 已取消</i>`, parse_mode: "HTML" })
+						.catch(() => undefined);
+					finish(undefined);
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				if (signal.aborted) onAbort();
+			}
 		}).then((choice) => {
 			if (choice !== undefined) {
 				const picked = options[Number(choice)] ?? "?";
@@ -124,8 +142,9 @@ export class TelegramUI implements ExtensionUIContext {
 	}
 
 	async select(title: string, options: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<string | undefined> {
-		const choice = await this.ask(title, "", options.slice(0, 8), opts?.timeout);
-		return choice === undefined ? undefined : options[Number(choice)];
+		const choices = options.slice(0, 8);
+		const choice = await this.ask(title, "", choices, opts?.timeout, opts?.signal);
+		return choice === undefined ? undefined : choices[Number(choice)];
 	}
 
 	/** No text-entry dialog over Telegram in v1; extensions must handle undefined. */

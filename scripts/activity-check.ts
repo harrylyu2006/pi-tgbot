@@ -1,5 +1,5 @@
 import { cumulativeThinking, toolActivityDetail, createEventRouter } from "../src/agent/events.ts";
-import { LiveMessage } from "../src/telegram/live.ts";
+import { LiveMessage, stripLeadingPromptEcho } from "../src/telegram/live.ts";
 
 let failures = 0;
 function check(name: string, got: string, want: string): void {
@@ -220,6 +220,16 @@ console.log("活动块整体封顶：");
 	const busy = h.activities[h.activities.length - 1] ?? "";
 	check("忙时活动块不超过 5 行", busy.split("\n").length <= 5 ? "是" : `${busy.split("\n").length} 行`, "是");
 	checkNotContains("块内条目明细无换行溢出", busy, "a │ b\nc");
+}
+
+console.log("仅隐藏开头的 Prompt 原样复述：");
+{
+	const prompt = "请重新审计这个项目并告诉我有什么问题";
+	check("完全相同的首段隐藏", stripLeadingPromptEcho(prompt, prompt), "");
+	check("换行后的真实思考保留", stripLeadingPromptEcho(`${prompt}\n先检查源码结构`, prompt), "先检查源码结构");
+	check("冒号后的真实思考保留", stripLeadingPromptEcho(`${prompt}： 接下来检查日志`, prompt), "接下来检查日志");
+	check("短提示不做猜测性过滤", stripLeadingPromptEcho("修复它\n先定位问题", "修复它"), "修复它\n先定位问题");
+	check("非原样复述不受影响", stripLeadingPromptEcho("我需要先理解需求，然后检查代码", prompt), "我需要先理解需求，然后检查代码");
 }
 
 console.log("出站脱敏与思考渲染：");

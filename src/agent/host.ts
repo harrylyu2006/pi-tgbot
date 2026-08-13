@@ -119,7 +119,7 @@ export class AgentHost {
 		if (paths.some((p: string) => /pi-telegram/.test(p))) {
 			throw new Error("refusing to start: a pi-telegram extension loaded and would contend for the bot token");
 		}
-		this.log.info({ msg: "extensions loaded", paths, errors: loaded.errors ?? [] });
+		this.log.info({ msg: "extensions loaded", extensionCount: paths.length, extensionErrorCount: (loaded.errors ?? []).length });
 
 		await this.createSession(false);
 	}
@@ -151,7 +151,7 @@ export class AgentHost {
 		this.sessionValue = session;
 		const generation = ++this.generationValue;
 
-		if (created.modelFallbackMessage) this.log.warn({ msg: "model fallback", detail: created.modelFallbackMessage });
+		if (created.modelFallbackMessage) this.log.warn({ msg: "model fallback" });
 
 		// Durable operator choices beat config/settings defaults. This is applied on
 		// both daemon startup and `/new`, so clearing context never resets controls.

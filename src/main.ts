@@ -148,6 +148,7 @@ class Dispatcher {
 			notifyAfterMs: config.render.notifyAfterMs,
 			...(item.placeholderId !== undefined ? { existingMessageId: item.placeholderId } : {}),
 		});
+		live.setPrompt(item.text);
 		this.live = live;
 		this.activeChatId = item.chatId;
 
@@ -175,8 +176,10 @@ class Dispatcher {
 		} catch (err) {
 			// prompt() throws on: run already active, during compaction, no model
 			// selected, failed provider auth. None of those should kill the daemon.
+			// Do not echo the raw error to Telegram: providers and extensions may put
+			// request bodies, URLs or credentials in it.
 			log.error({ msg: "turn failed", ...errFields(err) });
-			await live.finish(`⚠️ 这一轮失败了：\n${String(err).slice(0, 800)}`).catch(() => {});
+			await live.finish("⚠️ 这一轮失败了。详细错误已隐藏，请检查服务状态和本机日志中的错误类型。").catch(() => {});
 		} finally {
 			typing.stop();
 			this.idleWatchdog.stop();
@@ -198,8 +201,7 @@ const route = createEventRouter({
 	log: log.child("events"),
 	currentGeneration: () => host.generation,
 	tools: {
-		start: (info) =>
-			audit.start({ sessionId: host.generation > 0 ? host.session.sessionId : "?", generation: host.generation, ...info }),
+		start: (info) => audit.start({ generation: host.generation, ...info }),
 		end: (info) => audit.end(info),
 	},
 	sink: {
@@ -560,7 +562,10 @@ function handleUpdate(update: TgUpdate): void {
 	if (text === "/new") {
 		void host.reset().then(
 			() => api.sendMessage({ chat_id: msg.chat.id, text: "🆕 已开新会话。" }),
-			(err: unknown) => api.sendMessage({ chat_id: msg.chat.id, text: `新建会话失败：${String(err).slice(0, 300)}` }),
+			(err: unknown) => {
+				log.warn({ msg: "new session failed", ...errFields(err) });
+				return api.sendMessage({ chat_id: msg.chat.id, text: "新建会话失败。详细错误已隐藏，请检查本机日志中的错误类型。" });
+			},
 		);
 		return;
 	}
@@ -594,7 +599,7 @@ async function shutdown(reason: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-	log.info({ msg: "starting", configPath, cwd: config.cwd, sessionDir: config.sessionDir });
+	log.info({ msg: "starting" });
 
 	state.load();
 	audit.init();
@@ -605,7 +610,7 @@ async function main(): Promise<void> {
 	panelCtx.host = host;
 
 	await poller.preflight();
-	log.info({ msg: "ready", bot: poller.identity });
+	log.info({ msg: "ready" });
 
 	// A turn that was in flight when we died leaves a dead "⏳" in the chat. Say
 	// so rather than re-running it: the prompt may have already had side effects,

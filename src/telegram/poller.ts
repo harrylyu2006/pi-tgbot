@@ -68,8 +68,6 @@ export class Poller {
 	private offset: number | undefined;
 	private backoffMs = 1000;
 	private stateValue: PollerState = "starting";
-	private botId = 0;
-	private botUsername = "";
 
 	constructor(api: TelegramApi, log: Logger, opts: PollerOptions) {
 		this.api = api;
@@ -86,24 +84,18 @@ export class Poller {
 		this.stateValue = next;
 	}
 
-	get identity(): { id: number; username: string } {
-		return { id: this.botId, username: this.botUsername };
-	}
-
 	/**
 	 * Verify the token and clear anything that would prevent long polling.
 	 * A configured webhook makes getUpdates fail permanently, so we remove it —
 	 * loudly, because that stomps whoever configured it.
 	 */
 	async preflight(): Promise<void> {
-		const me = await this.api.getMe(this.abort.signal);
-		this.botId = me.id;
-		this.botUsername = me.username ?? "";
-		this.log.info({ msg: "authenticated", botId: me.id, username: me.username });
+		await this.api.getMe(this.abort.signal);
+		this.log.info({ msg: "authenticated" });
 
 		const hook = await this.api.getWebhookInfo(this.abort.signal);
 		if (hook.url) {
-			this.log.warn({ msg: "deleting configured webhook to enable long polling", url: hook.url, pending: hook.pending_update_count });
+			this.log.warn({ msg: "deleting configured webhook to enable long polling", pending: hook.pending_update_count });
 			await this.api.deleteWebhook(this.abort.signal);
 		}
 
@@ -190,12 +182,15 @@ export class Poller {
 			return false;
 		}
 		if (from.id !== this.opts.allowedUserId) {
-			this.log.warn({
-				msg: "dropping update from non-allowlisted user",
-				userId: from.id,
-				username: from.username,
-				expected: this.opts.allowedUserId,
-			});
+			this.log.warn({ msg: "dropping update from non-allowlisted user" });
+			return false;
+		}
+		const chat = update.message?.chat ?? update.callback_query?.message?.chat;
+		// Sender allowlisting alone is insufficient: the operator can add the bot
+		// to a group, where answers and local-system details would be visible to
+		// every member. A one-operator daemon must stay in that operator's DM.
+		if (chat && (chat.type !== "private" || chat.id !== this.opts.allowedUserId)) {
+			this.log.warn({ msg: "dropping update outside the operator private chat" });
 			return false;
 		}
 		if (update.edited_message) {

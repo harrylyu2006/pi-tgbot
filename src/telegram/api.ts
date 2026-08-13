@@ -5,7 +5,9 @@
  * classification, timeouts and abort wiring exist in exactly one place.
  */
 
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { classifyApiError, classifyNetworkError, TgError } from "../errors.ts";
 import { streamToFile } from "./files.ts";
@@ -98,7 +100,7 @@ export class TelegramApi {
 			// Cosmetic failures are logged at debug so they cannot drown out the
 			// warnings that mean something is actually wrong.
 			const level = opts?.cosmetic ? "debug" : "warn";
-			this.log[level]({ msg: "request failed", method, elapsedMs: Date.now() - startedAt, budgetMs: timeoutMs, err: String(err) });
+			this.log[level]({ msg: "request failed", method, elapsedMs: Date.now() - startedAt, budgetMs: timeoutMs, errName: err instanceof Error ? err.name : typeof err });
 			throw classifyNetworkError(method, err);
 		}
 
@@ -192,18 +194,59 @@ export class TelegramApi {
 		await streamToFile(res.body as ReadableStream<Uint8Array> | null, dest);
 	}
 
-	/** Multipart upload via native FormData/Blob — no form-data dependency. */
+	/**
+	 * Stream one multipart upload without buffering the whole file in memory.
+	 * `duplex: "half"` is required by Node fetch for streaming request bodies.
+	 */
 	async sendFile(chatId: number, path: string, kind: "photo" | "document", caption?: string): Promise<TgMessage> {
 		const method = kind === "photo" ? "sendPhoto" : "sendDocument";
-		const form = new FormData();
-		form.set("chat_id", String(chatId));
-		if (caption) form.set("caption", caption.slice(0, 1024));
-		const data = await readFile(path);
-		form.set(kind, new Blob([new Uint8Array(data)]), basename(path));
+		const boundary = `----pi-tg-${randomUUID()}`;
+		const filename = basename(path).replace(/["\r\n]/g, "_");
+		const fields = [
+			`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`,
+			...(caption
+				? [`--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption.slice(0, 1024)}\r\n`]
+				: []),
+			`--${boundary}\r\nContent-Disposition: form-data; name="${kind}"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+		];
+		const closing = `\r\n--${boundary}--\r\n`;
+		let file: Awaited<ReturnType<typeof open>>;
+		try {
+			file = await open(path, "r");
+		} catch (err) {
+			throw classifyNetworkError(method, err);
+		}
 
-		const res = await fetch(`${this.base}/${method}`, { method: "POST", body: form, signal: AbortSignal.timeout(180_000) });
-		const body = (await res.json()) as TgApiResponse<TgMessage>;
-		if (!res.ok || !body.ok) throw classifyApiError(method, res.status, body);
-		return body.result as TgMessage;
+		try {
+			const openedStat = await file.stat();
+			if (!openedStat.isFile()) throw new Error("outbound path is no longer a regular file");
+			const contentLength = fields.reduce((sum, value) => sum + Buffer.byteLength(value), 0) + openedStat.size + Buffer.byteLength(closing);
+			const body = ReadableStream.from((async function* (): AsyncGenerator<Uint8Array> {
+				for (const field of fields) yield Buffer.from(field);
+				for await (const chunk of createReadStream("", { fd: file.fd, autoClose: false })) yield chunk as Buffer;
+				yield Buffer.from(closing);
+			})());
+			const res = await fetch(`${this.base}/${method}`, {
+				method: "POST",
+				headers: { "content-type": `multipart/form-data; boundary=${boundary}`, "content-length": String(contentLength) },
+				body,
+				duplex: "half",
+				signal: AbortSignal.timeout(180_000),
+			});
+			let response: TgApiResponse<TgMessage> | undefined;
+			try {
+				response = (await res.json()) as TgApiResponse<TgMessage>;
+			} catch {
+				if (!res.ok) throw classifyApiError(method, res.status, undefined);
+				throw new TgError("transient", `${method}: non-JSON response (HTTP ${res.status})`, { method, status: res.status });
+			}
+			if (!res.ok || !response.ok) throw classifyApiError(method, res.status, response);
+			return response.result as TgMessage;
+		} catch (err) {
+			if (err instanceof TgError) throw err;
+			throw classifyNetworkError(method, err);
+		} finally {
+			await file.close().catch(() => undefined);
+		}
 	}
 }

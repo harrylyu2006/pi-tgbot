@@ -43,5 +43,20 @@ for (const [idx, want, name] of [["0", true, "点了允许"], ["1", false, "点�
   check(name, await p, want);
 }
 
+// 5) 调用方 abort 时及时返回 undefined，而不是继续等 UI 超时。
+{
+  const controller = new AbortController();
+  const ui = new TelegramUI({
+    api: { sendMessage: async () => ({ message_id: 10 }), editMessageText: async () => true } as any,
+    log, bootId: "t", currentChatId: () => 123, generation: () => 1, timeoutMs: 5000,
+  });
+  const started = Date.now();
+  const pending = ui.select("选择", ["A", "B"], { signal: controller.signal, timeout: 5000 });
+  await new Promise(r => setTimeout(r, 30));
+  controller.abort();
+  const picked = await pending;
+  check("abort signal 立即取消选择", picked === undefined && Date.now() - started < 1000, true);
+}
+
 console.log(fails === 0 ? "\nFAIL-CLOSED 验证通过" : `\n${fails} 处不符合预期`);
 process.exit(fails === 0 ? 0 : 1);

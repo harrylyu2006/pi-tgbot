@@ -17,10 +17,11 @@ export function setLevel(level: Level): void {
 	threshold = LEVEL_ORDER[level];
 }
 
-const SECRET_KEY = /^(.*(token|key|secret|password|authorization).*)$/i;
+const SECRET_KEY = /^(.*(token|key|secret|password|authorization|cookie).*)$/i;
+const PRIVATE_LOG_KEY = /^(?:agentPreferences|arg|available|bot|botId|chatId|commands|configPath|cwd|description|dest|detail|err|errors?|file|messageId|model|path|paths|replyTo|sample|sessionDir|sessionId|startedAt|title|updateId|url|userId|username|wanted)$/i;
 const BOT_TOKEN = /\b\d{8,12}:[A-Za-z0-9_-]{30,}\b/g;
 
-/** Strip anything token-shaped before it reaches the log stream. */
+/** Strip credentials and private identifiers before they reach journald or audit metadata. */
 export function redact(value: unknown, depth = 0): unknown {
 	if (depth > 6) return "[deep]";
 	if (typeof value === "string") return value.replace(BOT_TOKEN, "[REDACTED_TOKEN]");
@@ -28,7 +29,7 @@ export function redact(value: unknown, depth = 0): unknown {
 	if (value && typeof value === "object") {
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-			out[k] = SECRET_KEY.test(k) ? "[REDACTED]" : redact(v, depth + 1);
+			out[k] = SECRET_KEY.test(k) ? "[REDACTED]" : PRIVATE_LOG_KEY.test(k) ? "[OMITTED]" : redact(v, depth + 1);
 		}
 		return out;
 	}
@@ -59,24 +60,20 @@ export function createLogger(comp: string): Logger {
 	};
 }
 
-/** Errors do not survive JSON.stringify; flatten them at the boundary. */
+/**
+ * Flatten only non-content-bearing error metadata. Provider and extension error
+ * messages can echo prompts, URLs, headers or tool output, so they never belong
+ * in journald.
+ */
 export function errFields(err: unknown): Record<string, unknown> {
 	if (err instanceof Error) {
-		const extra: Record<string, unknown> = {};
-		for (const k of ["kind", "status", "description", "retryAfter", "method"]) {
+		const extra: Record<string, unknown> = { errName: err.name };
+		for (const k of ["kind", "status", "retryAfter", "method"]) {
 			const v = (err as unknown as Record<string, unknown>)[k];
-			if (v !== undefined) extra[k] = v;
+			if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") extra[k] = v;
 		}
-		return { err: err.message, errName: err.name, ...extra };
+		return extra;
 	}
-	// Plain objects stringify to "[object Object]", which throws away the only
-	// evidence there was. Extensions throw such values, so serialize them.
-	if (err && typeof err === "object") {
-		try {
-			return { err: JSON.stringify(err, Object.getOwnPropertyNames(err)).slice(0, 2000) };
-		} catch {
-			return { err: Object.prototype.toString.call(err), errKeys: Object.keys(err as object) };
-		}
-	}
-	return { err: String(err) };
+	if (err && typeof err === "object") return { errType: Object.prototype.toString.call(err) };
+	return { errType: typeof err };
 }

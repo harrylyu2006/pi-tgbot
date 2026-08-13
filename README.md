@@ -10,7 +10,7 @@
 
 - **Telegram 实时输出**：模型生成正文时持续编辑同一条消息，不必等整轮任务结束。
 - **实时运行状态**：显示思考、准备调用工具、工具名称、参数摘要、执行进度、重试和上下文压缩等状态。
-- **可见思考内容**：当模型 API 返回可展示的 thinking/reasoning 内容时，会在独立的可折叠引用块中实时显示；被 provider 标记为 redacted 的内容不会展示。
+- **可见思考内容**：当模型 API 返回可展示的 thinking/reasoning 内容时，会在独立的可折叠引用块中实时显示；若思考开头只是原样复述本轮 Prompt，则仅隐藏这段开头复述，后续思考照常显示；被 provider 标记为 redacted 的内容不会展示。
 - **长任务不会“假死”**：普通状态更新达到软上限后可以降频，但新的思考内容和正文仍会继续更新。
 - **可靠的最终送达**：较长任务完成后会另发新消息触发 Telegram 通知；超长回答会按 Telegram 限制安全分段。
 - **持久会话**：服务重启后恢复最近的专用会话；模型和思考等级也会保留。
@@ -20,7 +20,7 @@
 - **内置 Web 能力**：固定依赖并自动加载 `pi-web-access`，提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理能力。
 - **文件与贴纸**：接收照片、文档和 Telegram 贴纸；可把生成的本地文件发回当前对话。
 - **扩展 UI**：pi 扩展的 `confirm`、`select` 等交互可以映射为 Telegram 内联按钮。
-- **单用户模式**：只有 `allowedUserId` 指定的 Telegram 用户可以操作 Bot。
+- **单用户私聊模式**：只有 `allowedUserId` 指定的 Telegram 用户可以在与 Bot 的私聊中操作；即使操作者本人在群里发消息也会被拒绝，避免结果暴露给群成员。
 
 ## ⚠️ 使用前务必理解：数据安全与中转站风险
 
@@ -233,7 +233,7 @@ journalctl -u pi-tg -f
 - `agentDir`：pi 的设置、认证、模型、技能和上下文目录。
 - `sessionDir`：本 Bot 专用会话目录，不能与交互式 pi 的默认 session 目录混用。
 - `statePath`：保存已见 update、上次任务中断状态、模型和思考等级。
-- `auditPath`：追加写入的工具审计日志；记录经过截断/脱敏的参数，不复制工具结果。
+- `auditPath`：追加写入的工具审计日志；只记录工具名、时间、参数字节数和参数摘要哈希，不保存原始参数或工具结果。
 
 ### 实时消息
 
@@ -257,7 +257,7 @@ journalctl -u pi-tg -f
 ### 文件
 
 - `files.inboxDir`：Telegram 下载文件保存位置，按日期建立子目录。
-- `files.outboxRoots`：`telegram_send_file` 允许读取的根目录。不要配置为 `/` 或整个 HOME。
+- `files.outboxRoots`：`telegram_send_file` 允许读取的根目录。必须是非空绝对路径；程序拒绝 `/`，并在发送前解析真实路径、拒绝符号链接。不要配置整个 HOME。
 - `files.maxDownloadMb`：入站文件大小上限。
 - `files.maxUploadMb`：发回 Telegram 的文件大小上限。
 - `files.retentionDays`：启动时清理多少天以前的收件目录。
@@ -306,14 +306,14 @@ journalctl -u pi-tg -f
 
 项目重点不是安全拦截，但仍保留一些避免误操作或意外公开的基本机制：
 
-- 非 `allowedUserId` 的更新不会交给 Agent；
+- 非 `allowedUserId` 的更新不会交给 Agent，操作者在群聊中的更新也会被拒绝；
 - Bot 的 callback 带进程和 session generation 标识，旧按钮不能操作新会话；
 - `config.json`、凭证、模型目录、session、日志、inbox 和 `web-search.json` 默认被 Git 忽略；
 - journald 不记录完整 prompt 和模型正文；
 - 发往 Telegram 的模型输出会尝试遮盖常见 API Key、Bot Token、JWT、私钥块和带密码的数据库 URL；
-- 工具审计参数会截断和脱敏，工具结果不会复制进审计日志；
-- `publication-check` 检查常见敏感文件名和凭证格式；
-- 出站文件只能来自配置允许的目录。
+- 工具审计不保存原始参数或工具结果，只保留参数字节数和摘要哈希；
+- `publication-check` 检查常见敏感文件名、凭证格式，并默认拒绝图片资产（图片需先人工隐私审查）；
+- 出站文件只能来自配置允许的目录，拒绝符号链接，并采用流式上传避免把整个文件载入内存。
 
 这些机制都是有限的、启发式的：
 

@@ -49,7 +49,7 @@ export class TypingIndicator {
 			if (err instanceof TgError && err.kind === "throttled") {
 				this.suppressedUntil = Date.now() + (err.retryAfter ?? 5) * 1000;
 			} else {
-				this.log.debug({ msg: "typing action failed", err: String(err).slice(0, 120) });
+				this.log.debug({ msg: "typing action failed", errName: err instanceof Error ? err.name : typeof err });
 			}
 		} finally {
 			this.inFlight = false;

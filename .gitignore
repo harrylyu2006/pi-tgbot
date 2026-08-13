@@ -35,9 +35,14 @@ audit.jsonl
 *.log
 *.pid
 
-# Local backups and temporary files
+# Local backups, screenshots, and temporary files
 *.bak
 *.bak.*
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp
+/AUDIT-*.md
 *.backup
 *.old
 *.orig

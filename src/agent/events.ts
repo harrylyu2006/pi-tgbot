@@ -353,7 +353,7 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 		const err = errorOf(event);
 		if (err) {
 			latestError = err;
-			deps.log.error({ msg: "provider error during turn", detail: err.slice(0, 400) });
+			deps.log.error({ msg: "provider error during turn", errorChars: err.length });
 		}
 
 		switch (type) {
@@ -520,8 +520,9 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 				break;
 			}
 			case "extension_error": {
-				const detail = typeof event.error === "string" ? collapseDetail(event.error, 100) : "";
-				briefNote = detail ? `⚠️ 扩展错误：${detail}` : "⚠️ 扩展执行出错";
+				// Extension errors may echo tool input, URLs or provider payloads. The
+				// operator needs the state, not an untrusted message copied to Telegram.
+				briefNote = "⚠️ 扩展执行出错";
 				refreshActivity();
 				break;
 			}
