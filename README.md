@@ -17,7 +17,7 @@
 - **运行中可追加指令**：Agent 执行期间仍继续接收 Telegram 消息；新消息通过 Pi steering 注入当前运行，在当前 assistant turn（含已开始的工具调用）结束后的下一个模型边界读取，而不是等整轮任务结束再排成独立任务。
 - **操作面板**：查看状态、Token 用量、上下文占用、当前工具，切换模型和思考等级，创建新会话、中断任务或一键重启服务。
 - **模型 reasoning 兼容**：针对多种模型家族补充真实可用的思考档位和请求格式，避免面板展示 endpoint 实际不支持的等级。
-- **内置 Web 能力**：固定依赖并自动加载 `pi-web-access`，提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理能力。
+- **内置 Web 与视觉能力**：固定依赖并自动加载 `pi-web-access`（提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理）；内置 `image-describe` skill（多模态模型原生识图，纯文本模型支持 OpenRouter 视觉降级兜底）。
 - **文件与贴纸**：接收照片、文档和 Telegram 贴纸；可把生成的本地文件发回当前对话。
 - **扩展 UI**：pi 扩展的 `confirm`、`select` 等交互可以映射为 Telegram 内联按钮。
 - **单用户私聊模式**：只有 `allowedUserId` 指定的 Telegram 用户可以在与 Bot 的私聊中操作；即使操作者本人在群里发消息也会被拒绝，避免结果暴露给群成员。
@@ -75,6 +75,7 @@ Telegram Bot API
  AgentHost ── pi SDK 的持久 AgentSession
         │              │
         │              ├── 内置 pi-web-access
+        │              ├── 内置 image-describe skill
         │              ├── 显式配置的扩展
         │              ├── 内置与自定义工具
         │              └── 独立 session 目录
@@ -257,6 +258,7 @@ journalctl -u pi-tg -f
 - `tools.extraActive`：额外启用的已注册工具。
 - `extensions`：额外加载的本地路径或 `npm:` specifier。环境中的扩展不会被自动扫描。
 - 内置 `pi-web-access` 始终从本项目依赖目录加载；若在 `extensions` 里重复填写，会自动去重。
+- 内置 `image-describe` skill 随项目打包加载，多模态模型使用原生 `read` 识图，纯文本模型（如 DeepSeek、GLM）支持通过 OpenRouter 进行视觉兜底。
 
 ### 文件
 
@@ -295,7 +297,9 @@ journalctl -u pi-tg -f
 
 把 2–8 个选项显示成 Telegram 内联按钮，并把用户选择返回同一轮 Agent。超时或按钮发送失败时返回无选择，不让模型自行猜测。
 
-## 内置 Web 工具
+## 内置 Web 与视觉工具
+
+### `pi-web-access`
 
 默认 `pi-web-access` 注册四类能力：
 
@@ -305,6 +309,13 @@ journalctl -u pi-tg -f
 - 检索前一次搜索或抓取保存的完整内容。
 
 工具公开名称可以由 `web-search.json` 的 `toolNames` 修改，因此实际会话中可能显示为 `web_search` / `fetch_content`，也可能显示为自定义名称。
+
+### `image-describe` Skill
+
+项目内置 `image-describe` 识图 skill：
+
+- **多模态视觉模型**（如 Gemini 3.7 Flash、Claude Sonnet、GPT-4o/5 等）：优先通过 SDK 内置的 `read` 工具进行原生识图，不消耗额外 API 额度；
+- **纯文本模型**（如 DeepSeek、GLM 等）：自动降级调用 `skills/image-describe/scripts/describe.sh`，通过 OpenRouter（支持 Gemma 4 26B 等轻量视觉模型）识别图片内容。可通过环境变量 `OPENROUTER_API_KEY` 或在 `~/.pi/agent/auth.json` 中配置 OpenRouter Key。
 
 ## 数据存储与内置保护
 
@@ -349,6 +360,7 @@ npm test
 - 模型思考等级与 provider payload 兼容；
 - 状态恢复、滑动空闲超时和操作面板；
 - 内置 `pi-web-access` 加载及四类能力注册；
+- 内置 `image-describe` skill 加载与校验；
 - 公开发布文件、图片资产和常见凭证扫描。
 
 可选的真实 SDK 探针会创建隔离 session 并实际请求当前模型：
@@ -416,7 +428,7 @@ git diff --cached --check
 - 只支持一个 Telegram 操作者和一个长期 Agent 会话；
 - 只支持 long polling，启动时会移除 webhook；
 - 暂不转写语音消息；
-- 图片以本地文件路径交给 Agent，纯文本模型需要额外视觉工具或 skill；
+- 图片以本地文件路径交给 Agent（多模态模型原生支持，纯文本模型可通过内置 `image-describe` skill 进行视觉兜底）；
 - 视频贴纸预览依赖 `ffmpeg`；
 - provider 不返回 thinking 内容时，Telegram 只能显示“思考中”阶段，无法展示具体内容；
 - thinking/reasoning 是否可见、格式和完整程度取决于 provider；

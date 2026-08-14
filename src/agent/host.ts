@@ -22,6 +22,7 @@ import { availableLevelsFor, enrichThinkingLevels, preferredDefaultThinkingLevel
 
 const BUILTIN_EXTENSIONS = [fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url))];
 const BUILTIN_EXTENSION_PACKAGES = /^npm:pi-web-access(?:@|$)/;
+const BUILTIN_SKILLS = [fileURLToPath(new URL("../../skills", import.meta.url))];
 
 // The SDK ships .d.ts that pull in its own module graph; typing it precisely
 // here would couple us to internals we deliberately do not depend on. The
@@ -117,6 +118,7 @@ export class AgentHost {
 			settingsManager: this.settingsManager,
 			noExtensions: true,
 			additionalExtensionPaths: extensionPaths,
+			additionalSkillPaths: BUILTIN_SKILLS,
 		});
 		await this.loader.reload();
 

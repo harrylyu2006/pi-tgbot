@@ -1,9 +1,9 @@
 /**
  * Sticker preprocessing: turn Telegram sticker files into something the
- * text-only model can work with.
+ * model can work with.
  *
- * - Static stickers arrive as .webp — the model reads them via the
- *   image-describe skill (OpenRouter vision), same path as photos.
+ * - Static stickers arrive as .webp — multimodal models inspect them via native
+ *   `read`, text-only models fall back to the image-describe skill (OpenRouter).
  * - Animated stickers arrive as .tgs — a gzip-compressed Lottie JSON. We
  *   extract the text layers so the model gets the actual words without
  *   needing a renderer; the raw path is still included for deeper digs.
