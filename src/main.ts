@@ -406,17 +406,91 @@ async function handleCallback(update: TgUpdate): Promise<void> {
 }
 
 /**
- * Download attachments, then turn them into a prompt that names the saved
- * paths. The caption is the operator's actual instruction; without one we ask
- * the model to look at the file rather than guessing at intent.
+ * Buffer for Telegram media groups (albums) so multiple photos/documents sent
+ * together are downloaded and prompted as a single combined batch.
  */
+interface MediaGroupBuffer {
+	mediaGroupId: string;
+	chatId: number;
+	replyTo: number;
+	caption: string;
+	paths: string[];
+	rejected: string[];
+	timer: NodeJS.Timeout;
+}
+
+const mediaGroups = new Map<string, MediaGroupBuffer>();
+const MEDIA_GROUP_DEBOUNCE_MS = 600;
+
+function flushMediaGroup(mediaGroupId: string): void {
+	const group = mediaGroups.get(mediaGroupId);
+	if (!group) return;
+	mediaGroups.delete(mediaGroupId);
+
+	if (group.rejected.length > 0) {
+		void api
+			.sendMessage({
+				chat_id: group.chatId,
+				text: `⚠️ 有附件没收下：\n${group.rejected.join("\n")}`,
+				reply_to_message_id: group.replyTo,
+			})
+			.catch(() => undefined);
+	}
+	if (group.paths.length === 0) return;
+
+	const caption = group.caption.trim();
+	const list = group.paths.map((p) => `- ${p}`).join("\n");
+	const text = caption
+		? `${caption}\n\n（我通过 Telegram 发来的文件已保存到本机：\n${list}\n）`
+		: `我通过 Telegram 发来了文件，已保存到本机：\n${list}\n\n请查看这些文件并告诉我它们是什么。`;
+
+	log.info({
+		msg: "media group flushed",
+		mediaGroupId,
+		count: group.paths.length,
+		hasCaption: caption.length > 0,
+	});
+	dispatcher.enqueue({ text, chatId: group.chatId, replyTo: group.replyTo });
+}
+
 /**
  * Download attachments, then turn them into a prompt that names the saved
  * paths. The caption is the operator's actual instruction; without one we ask
  * the model to look at the file rather than guessing at intent.
+ *
+ * Media groups (albums) are debounced so multiple photos sent together are
+ * merged into a single prompt.
  */
 async function handleAttachment(msg: NonNullable<TgUpdate["message"]>): Promise<void> {
 	const { paths, rejected } = await files.receive(msg);
+
+	const mediaGroupId = msg.media_group_id;
+	if (mediaGroupId) {
+		const existing = mediaGroups.get(mediaGroupId);
+		const caption = (msg.caption ?? "").trim();
+		if (existing) {
+			clearTimeout(existing.timer);
+			existing.paths.push(...paths);
+			existing.rejected.push(...rejected);
+			if (!existing.caption && caption) {
+				existing.caption = caption;
+			}
+			existing.timer = setTimeout(() => flushMediaGroup(mediaGroupId), MEDIA_GROUP_DEBOUNCE_MS);
+		} else {
+			const timer = setTimeout(() => flushMediaGroup(mediaGroupId), MEDIA_GROUP_DEBOUNCE_MS);
+			mediaGroups.set(mediaGroupId, {
+				mediaGroupId,
+				chatId: msg.chat.id,
+				replyTo: msg.message_id,
+				caption,
+				paths: [...paths],
+				rejected: [...rejected],
+				timer,
+			});
+		}
+		return;
+	}
+
 	if (rejected.length > 0) {
 		await api
 			.sendMessage({ chat_id: msg.chat.id, text: `⚠️ 有附件没收下：\n${rejected.join("\n")}`, reply_to_message_id: msg.message_id })
@@ -611,6 +685,10 @@ async function shutdown(reason: string): Promise<void> {
 	log.info({ msg: "shutting down", reason });
 
 	clearInterval(keepAlive);
+	for (const [, group] of mediaGroups) {
+		clearTimeout(group.timer);
+	}
+	mediaGroups.clear();
 	poller.stop();
 	await dispatcher.current?.sealWith("⏹ 服务重启中，本轮已中断。").catch(() => {});
 	await host.stop();
