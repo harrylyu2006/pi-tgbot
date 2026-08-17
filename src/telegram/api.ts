@@ -76,10 +76,10 @@ export class TelegramApi {
 		params: Record<string, unknown>,
 		opts?: { signal?: AbortSignal; timeoutMs?: number; headers?: Record<string, string>; cosmetic?: boolean },
 	): Promise<T> {
-		// 15s, not 30s: a Bot API call that has not answered by then is stalled,
-		// not slow. Observed stalls sit at exactly the budget, so a shorter
-		// budget just means the retry on a fresh connection happens sooner.
-		const timeoutMs = opts?.timeoutMs ?? 15_000;
+		// 8s: an edit or send that has not answered by then is wedged, not slow —
+		// observed stalls land exactly on whatever budget is set, so a shorter
+		// budget only changes how soon the retry on a fresh connection happens.
+		const timeoutMs = opts?.timeoutMs ?? 8_000;
 		const timeoutSignal = AbortSignal.timeout(timeoutMs);
 		const signal = opts?.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
 		const startedAt = Date.now();
@@ -151,7 +151,7 @@ export class TelegramApi {
 	 * removes that failure mode entirely.
 	 */
 	getUpdates(params: GetUpdatesParams, signal?: AbortSignal): Promise<TgUpdate[]> {
-		const pollSeconds = params.timeout ?? 30;
+		const pollSeconds = params.timeout ?? 10;
 		return this.call<TgUpdate[]>(
 			"getUpdates",
 			{ ...params },

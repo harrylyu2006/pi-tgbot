@@ -255,6 +255,22 @@ const host = new AgentHost({
 	uiContext: telegramUI,
 });
 
+/**
+ * End the in-flight turn with a visible error. Safe to call when nothing is
+ * running: without a live message there is nothing to report and nothing to
+ * release.
+ */
+function failActiveTurn(err: unknown): void {
+	const live = dispatcher?.current;
+	if (!live) return;
+	// Same policy as the `turn failed` path: the notice is visible, the raw text
+	// is not. Extension exceptions routinely carry request bodies and URLs.
+	void live
+		.finish("⚠️ 这一轮被一个未捕获的扩展异常中断了。请重发；反复出现说明某个扩展有 bug，错误类型见本机日志。")
+		.catch(() => undefined);
+	dispatcher.markSettled();
+}
+
 let fatal: TgError | null = null;
 
 /**
@@ -734,6 +750,11 @@ async function main(): Promise<void> {
 	});
 	process.on("unhandledRejection", (err) => {
 		log.error({ msg: "unhandled rejection", ...errFields(err) });
+		// An extension whose tool promise rejects outside the turn's own chain
+		// leaves `agent_settled` unfired: the turn hangs until the 20-minute idle
+		// watchdog, in total silence, and every later message queues behind it.
+		// Treat it as a turn failure so the operator is told and the queue moves.
+		failActiveTurn(err);
 	});
 
 	await poller.run();

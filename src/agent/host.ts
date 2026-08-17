@@ -20,8 +20,11 @@ import type { Config } from "../config.ts";
 import type { AgentPreferences } from "../state.ts";
 import { availableLevelsFor, enrichThinkingLevels, preferredDefaultThinkingLevelFor, type ModelLike } from "./reasoning.ts";
 
-const BUILTIN_EXTENSIONS = [fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url))];
-const BUILTIN_EXTENSION_PACKAGES = /^npm:pi-web-access(?:@|$)/;
+const BUILTIN_EXTENSIONS = [
+	fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url)),
+	fileURLToPath(new URL("../../vendor/pi-email", import.meta.url)),
+];
+const BUILTIN_EXTENSION_PACKAGES = /^(?:npm:pi-web-access|npm:@patimweb\/pi-email)(?:@|$)/;
 const BUILTIN_SKILLS = [fileURLToPath(new URL("../../skills", import.meta.url))];
 
 // The SDK ships .d.ts that pull in its own module graph; typing it precisely
@@ -283,7 +286,7 @@ export class AgentHost {
 			(session as unknown as { setThinkingLevel(l: string): void }).setThinkingLevel(level);
 			this.log.info({
 				msg: source === "panel" ? "thinking level changed" : source === "restored" ? "thinking level restored" : "provider thinking default applied",
-				level,
+				thinkingLevel: level,
 			});
 			return true;
 		} catch (err) {

@@ -7,6 +7,8 @@
  * production services is the wrong place for them. Only lengths and ids.
  */
 
+import { redactOutbound } from "./telegram/redact.ts";
+
 export type Level = "debug" | "info" | "warn" | "error";
 
 const LEVEL_ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
@@ -46,7 +48,10 @@ export interface Logger {
 
 function emit(level: Level, comp: string, fields: Record<string, unknown>): void {
 	if (LEVEL_ORDER[level] < threshold) return;
-	const record = { ts: new Date().toISOString(), level, comp, ...(redact(fields) as Record<string, unknown>) };
+	// Reserved keys go *after* the spread: a caller field named `level` (a thinking
+	// level, say) would otherwise overwrite the log level and make the record
+	// invisible to any `level=error` filter.
+	const record = { ...(redact(fields) as Record<string, unknown>), ts: new Date().toISOString(), level, comp };
 	process.stdout.write(`${JSON.stringify(record)}\n`);
 }
 
@@ -65,15 +70,37 @@ export function createLogger(comp: string): Logger {
  * messages can echo prompts, URLs, headers or tool output, so they never belong
  * in journald.
  */
+/**
+ * Error text is diagnostics, not user content, and hiding it is what turned two
+ * hangs into "no notice at all" — for the operator *and* for whoever debugs it.
+ * The message is kept, but scrubbed with the same outbound rules that protect
+ * the chat transcript and clipped, so a credential embedded in an exception
+ * still never reaches the log.
+ */
+function safeErrText(value: unknown, max = 400): string {
+	const raw = typeof value === "string" ? value : String(value ?? "");
+	return redactOutbound(raw).text.replace(/\s+/g, " ").slice(0, max);
+}
+
 export function errFields(err: unknown): Record<string, unknown> {
 	if (err instanceof Error) {
-		const extra: Record<string, unknown> = { errName: err.name };
+		const extra: Record<string, unknown> = { errName: err.name, errMessage: safeErrText(err.message) };
+		// Node attaches the connection target to socket/TLS errors. Without it a
+		// "self-signed certificate" rejection names no host, and the only way to
+		// find the offender is to guess — which is how one TLS failure cost an
+		// evening of wrong theories.
+		for (const k of ["host", "hostname", "port", "address", "syscall", "code"]) {
+			const v = (err as unknown as Record<string, unknown>)[k];
+			if (typeof v === "string" || typeof v === "number") extra[`err${k[0]?.toUpperCase()}${k.slice(1)}`] = v;
+		}
+		const firstFrame = (err.stack ?? "").split("\n")[1];
+		if (firstFrame) extra.errAt = safeErrText(firstFrame, 160);
 		for (const k of ["kind", "status", "retryAfter", "method"]) {
 			const v = (err as unknown as Record<string, unknown>)[k];
 			if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") extra[k] = v;
 		}
 		return extra;
 	}
-	if (err && typeof err === "object") return { errType: Object.prototype.toString.call(err) };
+	if (err && typeof err === "object") return { errType: Object.prototype.toString.call(err), errMessage: safeErrText(JSON.stringify(err)) };
 	return { errType: typeof err };
 }

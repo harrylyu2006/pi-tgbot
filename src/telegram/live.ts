@@ -89,6 +89,9 @@ export class LiveMessage {
 	private inFlight = false;
 	private pending = false;
 	private suppressedUntil = 0;
+	/** Wall time lost to stalled edits since the last successful one. */
+	private stalledMs = 0;
+	private stalledCount = 0;
 	private closed = false;
 	private redactionNoted = false;
 	private readonly createdAt = Date.now();
@@ -177,6 +180,12 @@ export class LiveMessage {
 	/** Compile current state into one closed HTML body within the size budget. */
 	private compose(): string {
 		const blocks: string[] = [];
+		// Composed before the attempt, cleared after it succeeds — so the notice
+		// rides along on the first edit that actually lands, telling the operator
+		// the freeze was the network rather than a stuck model.
+		if (this.stalledCount > 0 && this.stalledMs >= 5000) {
+			blocks.push(`<i>⚠️ 网络抖动，刚才 ${Math.round(this.stalledMs / 1000)} 秒未能更新</i>`);
+		}
 		if (this.activity) blocks.push(`<i>${esc(this.activity)}</i>`);
 		if (this.thinking) {
 			const thinkingBlocks = compileBlocks(this.thinking);
@@ -250,12 +259,22 @@ export class LiveMessage {
 		if (body === this.lastSentBody) return; // Telegram 400s on unmodified edits
 
 		this.inFlight = true;
+		const attemptStartedAt = Date.now();
 		try {
 			await this.edit(body);
 			this.sentContentRevision = this.contentRevision;
 			this.lastEditAt = Date.now();
 			this.editCount++;
+			// A recovered stall is invisible otherwise: the operator saw a frozen
+			// message and has no way to tell a wedged network from a stuck model.
+			if (this.stalledCount > 0) {
+				this.log.info({ msg: "edit recovered after stall", stalledMs: this.stalledMs, attempts: this.stalledCount });
+				this.stalledCount = 0;
+				this.stalledMs = 0;
+			}
 		} catch (err) {
+			this.stalledMs += Date.now() - attemptStartedAt;
+			this.stalledCount++;
 			if (err instanceof TgError && err.kind === "throttled") {
 				const wait = (err.retryAfter ?? 5) * 1000;
 				this.suppressedUntil = Date.now() + wait;

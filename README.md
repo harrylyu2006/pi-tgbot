@@ -17,7 +17,7 @@
 - **运行中可追加指令**：Agent 执行期间仍继续接收 Telegram 消息；新消息通过 Pi steering 注入当前运行，在当前 assistant turn（含已开始的工具调用）结束后的下一个模型边界读取，而不是等整轮任务结束再排成独立任务。
 - **操作面板**：查看状态、Token 用量、上下文占用、当前工具，切换模型和思考等级，创建新会话、中断任务或一键重启服务。
 - **模型 reasoning 兼容**：针对多种模型家族补充真实可用的思考档位和请求格式，避免面板展示 endpoint 实际不支持的等级。
-- **内置 Web 与视觉能力**：固定依赖并自动加载 `pi-web-access`（提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理）；内置 `image-describe` skill（多模态模型原生识图，纯文本模型支持 OpenRouter 视觉降级兜底）。
+- **内置 Web、视觉与邮件能力**：固定依赖并自动加载 `pi-web-access`（提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理）与本地 vendored `pi-email` 扩展（IMAP/SMTP 邮件读取、搜索、发送、回复、转发、移动、删除和标记）；内置 `image-describe` skill（多模态模型原生识图，纯文本模型支持 OpenRouter 视觉降级兜底）。
 - **文件与贴纸**：接收照片、文档和 Telegram 贴纸；可把生成的本地文件发回当前对话。
 - **扩展 UI**：pi 扩展的 `confirm`、`select` 等交互可以映射为 Telegram 内联按钮。
 - **单用户私聊模式**：只有 `allowedUserId` 指定的 Telegram 用户可以在与 Bot 的私聊中操作；即使操作者本人在群里发消息也会被拒绝，避免结果暴露给群成员。
@@ -75,6 +75,7 @@ Telegram Bot API
  AgentHost ── pi SDK 的持久 AgentSession
         │              │
         │              ├── 内置 pi-web-access
+        │              ├── 本地 vendored pi-email
         │              ├── 内置 image-describe skill
         │              ├── 显式配置的扩展
         │              ├── 内置与自定义工具
@@ -113,6 +114,7 @@ Telegram Bot API
 - 你的 Telegram 数字用户 ID。
 - 至少一个已在 pi agent 目录中完成认证的模型/provider。
 - 可选：为 `pi-web-access` 配置搜索 provider；没有 Key 时可使用其零配置 Exa fallback。
+- 可选：通过 `email_setup` 配置 IMAP/SMTP 邮箱，凭证保存在服务账号的 `~/.pi/email-config.json`。
 - 可选：安装 `ffmpeg`，用于视频贴纸预览以及部分网页/视频能力。
 
 ## 安装
@@ -125,7 +127,7 @@ cd pi-tgbot
 npm ci --ignore-scripts
 ```
 
-`pi-web-access` 已固定在 `package.json` 中并由程序自动加载，不需要另外执行 `pi install`。`--ignore-scripts` 可减少依赖安装阶段执行生命周期脚本的风险；当前正常运行不依赖这些脚本。
+`pi-web-access` 与邮件依赖已固定在 `package.json` 中；`pi-web-access` 和本地 `vendor/pi-email` 都由程序自动加载，不需要另外执行 `pi install`。`pi-email` 的源码和补丁随仓库发布，不依赖每次启动时从 npm 临时安装。`--ignore-scripts` 可减少依赖安装阶段执行生命周期脚本的风险；当前正常运行不依赖这些脚本。
 
 ### 2. 建议创建独立服务账号
 
@@ -310,6 +312,17 @@ journalctl -u pi-tg -f
 
 工具公开名称可以由 `web-search.json` 的 `toolNames` 修改，因此实际会话中可能显示为 `web_search` / `fetch_content`，也可能显示为自定义名称。
 
+### `pi-email`
+
+项目将 `@patimweb/pi-email` 以源码形式 vendored 到 `vendor/pi-email/`，并作为内置扩展加载。可用工具包括：
+
+- `email_setup`、`email_status`：配置和查看邮箱账户；
+- `email_list_mailboxes`、`email_fetch`、`email_read`、`email_search`：列出文件夹、获取邮件、读取正文和搜索；
+- `email_send`、`email_reply`、`email_forward`：发送、回复和转发；
+- `email_move`、`email_delete`、`email_flag`：移动、删除和设置 IMAP 标记。
+
+首次使用前调用 `email_setup`。凭证写入当前服务账号的 `~/.pi/email-config.json`，目录权限为 `0700`，文件权限为 `0600`。vendor 版本还包含连接失败拒绝、TLS SNI、连接超时和 `email_flag` 异常传播修复，避免邮箱连接失败挂起整个 Agent turn。升级或替换上游邮件扩展时，需要重新检查并重新套用 `vendor/patches/README.md` 中的补丁。
+
 ### `image-describe` Skill
 
 项目内置 `image-describe` 识图 skill：
@@ -360,6 +373,7 @@ npm test
 - 模型思考等级与 provider payload 兼容；
 - 状态恢复、滑动空闲超时和操作面板；
 - 内置 `pi-web-access` 加载及四类能力注册；
+- 本地 vendored `pi-email` 扩展加载及 IMAP/SMTP 工具注册；（`npm run test:email`）
 - 内置 `image-describe` skill 加载与校验；
 - 公开发布文件、图片资产和常见凭证扫描。
 
@@ -433,7 +447,8 @@ git diff --cached --check
 - provider 不返回 thinking 内容时，Telegram 只能显示“思考中”阶段，无法展示具体内容；
 - thinking/reasoning 是否可见、格式和完整程度取决于 provider；
 - 项目不是安全沙箱，模型拥有服务账号可用的真实工具权限；
-- 当前实现绑定 `package.json` 中固定的 pi SDK 与 `pi-web-access` 版本，升级后应重新运行完整测试和 probe。
+- 当前实现绑定 `package.json` 中固定的 pi SDK、`pi-web-access` 和邮件运行时依赖版本，升级后应重新运行完整测试和 probe；
+- `vendor/pi-email` 是经过本地补丁的上游源码副本，更新上游版本时必须重新检查补丁和邮件测试。
 
 ## 开发
 

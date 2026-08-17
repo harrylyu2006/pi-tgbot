@@ -17,7 +17,12 @@ import type { TelegramApi } from "./api.ts";
 import type { TgUpdate } from "./types.ts";
 
 const ALLOWED_UPDATES = ["message", "callback_query"];
-const POLL_SECONDS = 30;
+// 10s, not 30s. The Telegram path from this box intermittently wedges: the
+// request connects and then never answers, so the only cost that matters is how
+// long we sit blind before giving up and reconnecting. A shorter poll caps that
+// blind window at ~20s instead of ~40s; six requests a minute instead of two is
+// not a meaningful load.
+const POLL_SECONDS = 10;
 
 export type PollerState = "starting" | "running" | "degraded" | "stopped";
 
