@@ -69,6 +69,10 @@ function fmtElapsed(ms: number): string {
 	return `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class LiveMessage {
 	private readonly api: TelegramApi;
 	private readonly log: Logger;
@@ -317,24 +321,51 @@ export class LiveMessage {
 		const notify = elapsed >= this.opts.notifyAfterMs;
 
 		if (notify) {
-			// Long turn: collapse the live message to a one-line receipt and deliver
-			// the answer as new messages, so Telegram actually pushes a notification
-			// and its preview carries the answer rather than "done".
-			await this.edit(`<i>✅ 完成 · 用时 ${esc(fmtElapsed(elapsed))} · 结果见下</i>`).catch(() => undefined);
+			// Deliver the answer BEFORE replacing the live message with a receipt.
+			// Telegram can throttle the first send after a long, edit-heavy turn. The
+			// old ordering collapsed the only copy to "结果见下", then dropped the
+			// answer on 429 while incorrectly logging success.
+			let delivered = 0;
 			for (const chunk of chunks) {
-				try {
-					await this.api.sendMessage({
-						chat_id: this.opts.chatId,
-						text: closeOpenTags(chunk),
-						parse_mode: "HTML",
-						link_preview_options: { is_disabled: true },
-					});
-				} catch (err) {
-					this.log.warn({ msg: "notification send failed", ...errFields(err) });
-					break;
+				let sent = false;
+				for (let attempt = 0; attempt < 4; attempt++) {
+					try {
+						await this.api.sendMessage({
+							chat_id: this.opts.chatId,
+							text: closeOpenTags(chunk),
+							parse_mode: "HTML",
+							link_preview_options: { is_disabled: true },
+						});
+						sent = true;
+						break;
+					} catch (err) {
+						this.log.warn({ msg: "notification send failed", attempt: attempt + 1, ...errFields(err) });
+						if (!(err instanceof TgError) || err.kind !== "throttled" || attempt === 3) break;
+						await sleep(Math.max(1, err.retryAfter ?? 5) * 1_000 + 250);
+					}
 				}
+				if (!sent) break;
+				delivered++;
 			}
-			this.log.info({ msg: "delivered as new message for notification", elapsedMs: elapsed, chunks: chunks.length });
+
+			if (delivered === chunks.length) {
+				await this.edit(`<i>✅ 完成 · 用时 ${esc(fmtElapsed(elapsed))} · 结果已另发</i>`).catch((err: unknown) =>
+					this.log.warn({ msg: "receipt edit failed", ...errFields(err) }),
+				);
+				this.log.info({ msg: "delivered as new message for notification", elapsedMs: elapsed, chunks: delivered });
+				return;
+			}
+
+			// Fail-safe: if even the retry budget could not send the first chunk,
+			// preserve the answer in the existing live message. Never leave a receipt
+			// that promises a result which was not delivered.
+			if (delivered === 0) {
+				const first = chunks[0] ?? esc("（无输出）");
+				await this.edit(closeOpenTags(first)).catch((err: unknown) =>
+					this.log.warn({ msg: "notification fallback edit failed", ...errFields(err) }),
+				);
+			}
+			this.log.warn({ msg: "notification delivery incomplete", elapsedMs: elapsed, delivered, totalChunks: chunks.length });
 			return;
 		}
 
