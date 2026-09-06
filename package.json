@@ -31,7 +31,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/main.ts",
+    "start": "node scripts/patch-web-access-background-notify.mjs && node src/main.ts",
     "probe": "node scripts/probe.ts",
     "check": "tsc --noEmit",
     "test": "npm run check && npm run test:render && npm run test:delivery && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:session-lifecycle && npm run test:steering && npm run test:idle-watchdog && npm run test:panel && npm run test:poller && npm run test:security && npm run test:upload && npm run test:web-access && npm run test:email && npm run test:skills && npm run publication-check",
@@ -49,7 +49,7 @@
     "test:poller": "node scripts/poller-check.ts",
     "test:security": "node scripts/security-check.ts",
     "test:upload": "node scripts/upload-check.ts",
-    "test:web-access": "node scripts/web-access-check.ts",
+    "test:web-access": "node scripts/patch-web-access-background-notify.mjs && node scripts/web-access-check.ts",
     "test:email": "node scripts/pi-email-check.ts",
     "test:skills": "node scripts/skills-check.ts",
     "publication-check": "node scripts/publication-check.mjs"

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,12 @@ const cwd = process.cwd();
 const agentDir = process.env.PI_TG_TEST_AGENT_DIR ?? join(tmpdir(), "pi-tgbot-test-agent");
 const sessionDir = mkdtempSync(join(tmpdir(), "pi-tgbot-web-access-"));
 const webAccessPath = fileURLToPath(new URL("../node_modules/pi-web-access", import.meta.url));
+const webAccessEntry = fileURLToPath(new URL("../node_modules/pi-web-access/index.ts", import.meta.url));
+const webAccessSource = readFileSync(webAccessEntry, "utf8");
+const contentReadyBlock = webAccessSource.match(/customType:\s*"web-search-content-ready"[\s\S]{0,300}?\{ triggerTurn: (true|false) \}/);
+if (!contentReadyBlock || contentReadyBlock[1] !== "false") {
+	throw new Error("pi-web-access background content-ready notification must not trigger an autonomous agent turn");
+}
 
 let session: any;
 try {
