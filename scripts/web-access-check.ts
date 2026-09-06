@@ -15,9 +15,11 @@ const sessionDir = mkdtempSync(join(tmpdir(), "pi-tgbot-web-access-"));
 const webAccessPath = fileURLToPath(new URL("../node_modules/pi-web-access", import.meta.url));
 const webAccessEntry = fileURLToPath(new URL("../node_modules/pi-web-access/index.ts", import.meta.url));
 const webAccessSource = readFileSync(webAccessEntry, "utf8");
-const contentReadyBlock = webAccessSource.match(/customType:\s*"web-search-content-ready"[\s\S]{0,300}?\{ triggerTurn: (true|false) \}/);
-if (!contentReadyBlock || contentReadyBlock[1] !== "false") {
-	throw new Error("pi-web-access background content-ready notification must not trigger an autonomous agent turn");
+if (webAccessSource.includes('customType: "web-search-content-ready"')) {
+	throw new Error("pi-web-access background content-ready status must not be injected into the agent session");
+}
+if (!webAccessSource.includes("Headless host: fetched data is already stored by appendEntry()")) {
+	throw new Error("pi-web-access background content-ready patch marker is missing");
 }
 
 let session: any;
