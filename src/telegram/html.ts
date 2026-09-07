@@ -33,30 +33,30 @@ export function closeOpenTags(html: string): string {
 	const tagRe = /<(\/?)([a-zA-Z-]+)((?:\s[^<>]*)?)>/g;
 	let match: RegExpExecArray | null;
 	let lastIndex = 0;
+	let repaired = "";
 
 	while ((match = tagRe.exec(html)) !== null) {
+		repaired += html.slice(lastIndex, match.index);
 		lastIndex = tagRe.lastIndex;
 		const closing = match[1] === "/";
 		const name = (match[2] ?? "").toLowerCase();
-		if (!ALLOWED.has(name)) continue;
+		if (!ALLOWED.has(name)) { repaired += esc(match[0]); continue; }
 		if (closing) {
 			const idx = stack.lastIndexOf(name);
 			if (idx < 0) continue;
-			// The requested close also implicitly closes any inner formatting. This
-			// mirrors HTML parsing and prevents stale nested tags from being appended
-			// after an already-closed outer blockquote/pre block.
+			for (let i = stack.length - 1; i >= idx; i--) repaired += `</${stack[i]}>`;
 			stack.splice(idx);
 		} else {
+			repaired += match[0];
 			stack.push(name);
 		}
 	}
 
 	// A trailing "<" or "<b" from a mid-write truncation would be parsed as text
 	// containing a stray angle bracket, which Telegram rejects.
-	let out = html;
 	const tail = html.slice(lastIndex);
 	const strayOpen = tail.lastIndexOf("<");
-	if (strayOpen >= 0) out = html.slice(0, lastIndex + strayOpen);
+	let out = repaired + (strayOpen >= 0 ? tail.slice(0, strayOpen) : tail);
 
 	for (let i = stack.length - 1; i >= 0; i--) out += `</${stack[i]}>`;
 	return out;

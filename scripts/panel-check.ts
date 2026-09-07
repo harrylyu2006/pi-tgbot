@@ -1,4 +1,5 @@
 import { renderPanel } from "../src/ui/panel.ts";
+import { encodeCallback, decodeCallback } from "../src/telegram/keyboard.ts";
 
 const session = {
 	model: { provider: "custom", id: "gpt-5.6-sol" },
@@ -41,6 +42,16 @@ ok("确认页有取消按钮", confirmButtons.some((b) => b.text === "取消"));
 
 const busyConfirm = await renderPanel({ ...ctx, busy: () => true }, "confirm_restart");
 ok("忙碌时明确警告当前任务会中断", busyConfirm.text.includes("当前任务会被中断"));
+
+const longModel = "provider/" + "长模型名称".repeat(25);
+const encoded = encodeCallback("model", longModel, "boot", 7);
+ok("长模型 ID 按钮不截断参数", Buffer.byteLength(encoded) <= 64 && decodeCallback(encoded)?.arg === longModel);
+ok("伪造引用失效", decodeCallback("1|boot|7|model|~missing") === null);
+
+const unknownUsage = await renderPanel({ ...ctx, host: { ...ctx.host, session: { ...session, getContextUsage: () => ({ tokens: null, contextWindow: 8192, percent: null }) } } }, "status");
+ok("压缩后未知 usage 不抛错", unknownUsage.text.includes("—"));
+const absentUsage = await renderPanel({ ...ctx, host: { ...ctx.host, session: { ...session, getContextUsage: () => undefined } } }, "status");
+ok("缺失 usage 不抛错", absentUsage.text.includes("—"));
 
 console.log(failures === 0 ? "\nPANEL CHECK PASSED" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

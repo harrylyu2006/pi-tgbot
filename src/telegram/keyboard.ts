@@ -17,6 +17,8 @@ export interface Callback {
 
 const SEP = "|";
 const VERSION = "1";
+const longArgs = new Map<string, string>();
+let nextArg = 0;
 
 /** Boot id: distinct per process, short enough to fit the 64-byte budget. */
 export function makeBootId(startedAtMs: number): string {
@@ -25,18 +27,27 @@ export function makeBootId(startedAtMs: number): string {
 
 export function encodeCallback(action: string, arg: string, boot: string, gen: number): string {
 	const data = [VERSION, boot, String(gen), action, arg].join(SEP);
-	if (Buffer.byteLength(data, "utf8") <= 64) return data;
-	// Truncating the argument is safe: every consumer re-resolves it against the
-	// live list rather than trusting it, so a clipped value simply misses.
-	const overflow = Buffer.byteLength(data, "utf8") - 64;
-	return [VERSION, boot, String(gen), action, arg.slice(0, Math.max(0, arg.length - overflow))].join(SEP);
+	if (Buffer.byteLength(data, "utf8") <= 64 && !arg.startsWith("~")) return data;
+	// A clipped model id can never resolve. Store a process-local opaque reference;
+	// boot/generation fencing still rejects old buttons and bounded eviction fails closed.
+	const ref = `~${(++nextArg).toString(36)}`;
+	const encoded = [VERSION, boot, String(gen), action, ref].join(SEP);
+	if (Buffer.byteLength(encoded, "utf8") > 64) throw new Error("Callback header exceeds Telegram limit");
+	longArgs.set(encoded, arg);
+	if (longArgs.size > 2048) longArgs.delete(longArgs.keys().next().value!);
+	return encoded;
 }
 
 export function decodeCallback(data: string | undefined): Callback | null {
 	if (!data) return null;
 	const parts = data.split(SEP);
 	if (parts.length < 5 || parts[0] !== VERSION) return null;
-	return { boot: parts[1] ?? "", gen: Number(parts[2] ?? "0"), action: parts[3] ?? "", arg: parts.slice(4).join(SEP) };
+	const gen = Number(parts[2]);
+	if (!Number.isSafeInteger(gen) || gen < 0) return null;
+	const rawArg = parts.slice(4).join(SEP);
+	const arg = rawArg.startsWith("~") ? longArgs.get(data) : rawArg;
+	if (arg === undefined) return null;
+	return { boot: parts[1] ?? "", gen, action: parts[3] ?? "", arg };
 }
 
 export interface Button {

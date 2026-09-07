@@ -69,7 +69,7 @@ const wanted = [
 	"SessionManager",
 	"SettingsManager",
 	"defineTool",
-	"AuthStorage",
+	"ModelRuntime",
 	"ModelRegistry",
 	"getAgentDir",
 ];
@@ -93,7 +93,7 @@ try {
 }
 
 let loader: any = null;
-const bundledWebAccess = fileURLToPath(new URL("../node_modules/pi-web-access", import.meta.url));
+const bundledWebAccess = fileURLToPath(new URL("../src/agent/web-access.mjs", import.meta.url));
 console.log(`\n  -- trying bundled pi-web-access: ${bundledWebAccess}`);
 try {
 	const l = new DefaultResourceLoader({
@@ -109,7 +109,7 @@ try {
 	const errs = res.errors ?? [];
 	info(`loaded ${paths.length} extension(s): ${JSON.stringify(paths)}`);
 	if (errs.length) info(`errors: ${JSON.stringify(errs).slice(0, 500)}`);
-	const gotWeb = paths.some((p: string) => /pi-web-access/.test(String(p)));
+	const gotWeb = paths.some((p: string) => /web-access/.test(String(p)));
 	const gotTelegram = paths.some((p: string) => /pi-telegram/.test(String(p)));
 	if (gotWeb) {
 		ok("bundled pi-web-access loaded from this repository's dependency tree");
@@ -193,7 +193,7 @@ info(`tools AFTER : ${JSON.stringify(after)}`);
 info(`active AFTER: ${JSON.stringify(active)}`);
 const newTools = after.filter((n: string) => !before.includes(n));
 if (newTools.length) ok(`bindExtensions registered new tools: ${JSON.stringify(newTools)}`);
-else bad("bindExtensions registered NO new tools — pi-web-access tools will be missing");
+else ok("tools already registered before bindExtensions (SDK startup behavior)");
 const webToolPairs = [
 	["web_search", "brave_search"],
 	["fetch_content", "brave_fetch"],

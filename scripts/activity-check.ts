@@ -263,7 +263,7 @@ live.setThinking("先读取 `/root/app.ts`，然后检查配置");
 const composed = (live as unknown as { compose(): string }).compose();
 checkContains("思考过程显示独立标题", composed, "💭 思考过程");
 checkContains("思考过程使用可折叠引用", composed, "<blockquote expandable>");
-checkContains("思考过程保留 Markdown 代码格式", composed, "<code>/root/app.ts</code>");
+checkContains("思考过程保留代码文本（避免 Telegram 引用嵌套限制）", composed, "/root/app.ts");
 
 console.log("编辑上限不冻结真实内容：");
 {

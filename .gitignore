@@ -30,6 +30,8 @@ inbox/
 outbox/
 state.json
 state.json.tmp
+*.deliveries.json
+*.deliveries.json.tmp
 audit.jsonl
 *.jsonl
 *.log

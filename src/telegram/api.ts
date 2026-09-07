@@ -62,7 +62,9 @@ export class TelegramApi {
 			const stalled = err instanceof TgError && err.kind === "transient" && /timeout|aborted/i.test(err.description);
 			// A stalled typing bubble is not worth a second request, and retrying it
 			// competes with the answer the operator is actually waiting for.
-			if (!stalled || opts?.cosmetic || opts?.signal?.aborted) throw err;
+			if (!stalled || opts?.cosmetic || opts?.signal?.aborted || method === "sendMessage") throw err;
+			// sendMessage has no idempotency key: a timeout may already have sent it.
+			// Preserve uncertain final chunks in the outbox for explicit /retry.
 			this.log.info({ msg: "retrying stalled request on a fresh connection", method });
 			return await this.callOnce<T>(method, params, {
 				...opts,

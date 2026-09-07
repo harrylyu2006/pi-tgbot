@@ -21,7 +21,7 @@ import type { AgentPreferences } from "../state.ts";
 import { availableLevelsFor, enrichThinkingLevels, preferredDefaultThinkingLevelFor, type ModelLike } from "./reasoning.ts";
 
 const BUILTIN_EXTENSIONS = [
-	fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url)),
+	fileURLToPath(new URL("./web-access.mjs", import.meta.url)),
 	fileURLToPath(new URL("../../vendor/pi-email", import.meta.url)),
 ];
 const BUILTIN_EXTENSION_PACKAGES = /^(?:npm:pi-web-access|npm:@patimweb\/pi-email)(?:@|$)/;
@@ -44,7 +44,7 @@ interface PiSession {
 	getAllTools(): Array<{ name: string }>;
 	getActiveToolNames(): string[];
 	setActiveToolsByName(names: string[]): void;
-	getContextUsage(): { tokens: number; contextWindow: number; percent: number };
+	getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
 	getSessionStats(): Record<string, unknown>;
 	getAvailableThinkingLevels(): string[];
 	supportsThinking(): boolean;
@@ -87,6 +87,7 @@ export class AgentHost {
 	private sessionValue: PiSession | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private generationValue = 0;
+	private resetPending: Promise<void> | null = null;
 
 	constructor(deps: AgentHostDeps) {
 		this.deps = deps;
@@ -113,7 +114,9 @@ export class AgentHost {
 		// is never imported. Filtering after discovery would be too late: the
 		// extension would already have run and started competing for our bot
 		// token on the same getUpdates slot.
-		const configuredExtensions = cfg.extensions.filter((extension) => !BUILTIN_EXTENSION_PACKAGES.test(extension));
+		const upstreamWeb = fileURLToPath(new URL("../../node_modules/pi-web-access", import.meta.url));
+		const configuredExtensions = cfg.extensions.filter((extension) => !BUILTIN_EXTENSION_PACKAGES.test(extension)
+			&& extension.replace(/\/$/, "") !== upstreamWeb && extension !== `${upstreamWeb}/index.ts`);
 		const extensionPaths = [...new Set([...BUILTIN_EXTENSIONS, ...configuredExtensions])];
 		this.loader = new this.pi.DefaultResourceLoader({
 			cwd: cfg.cwd,
@@ -195,7 +198,7 @@ export class AgentHost {
 			onError: (err: unknown) => {
 				this.log.warn({ msg: "extension error", ...errFields(err) });
 				// Surface it as a session event so the live activity row can show it.
-				this.deps.onEvent(this.generationValue, { type: "extension_error", error: err instanceof Error ? err.message : String(err) });
+				this.deps.onEvent(generation, { type: "extension_error", error: err instanceof Error ? err.message : String(err) });
 			},
 		});
 
@@ -214,7 +217,7 @@ export class AgentHost {
 			thinking: session.supportsThinking() ? session.thinkingLevel : "unsupported",
 			thinkingLevels: session.getAvailableThinkingLevels(),
 			activeTools: session.getActiveToolNames(),
-			contextWindow: session.getContextUsage().contextWindow,
+			contextWindow: session.getContextUsage()?.contextWindow,
 		});
 	}
 
@@ -354,7 +357,12 @@ export class AgentHost {
 	}
 
 	/** `/new`: drop context, but preserve the effective model and reasoning. */
-	async reset(): Promise<void> {
+	reset(): Promise<void> {
+		if (!this.resetPending) this.resetPending = this.resetSession().finally(() => { this.resetPending = null; });
+		return this.resetPending;
+	}
+
+	private async resetSession(): Promise<void> {
 		const old = this.sessionValue;
 		if (old) {
 			this.deps.savePreferences?.({
@@ -362,6 +370,8 @@ export class AgentHost {
 				thinkingLevel: old.thinkingLevel,
 			});
 		}
+		// Retain the old listener through abort so agent_settled reaches its owner.
+		if (old) await old.abort();
 		this.unsubscribe?.();
 		this.unsubscribe = null;
 		this.sessionValue = null;
@@ -376,6 +386,7 @@ export class AgentHost {
 	}
 
 	async stop(): Promise<void> {
+		await this.resetPending;
 		const session = this.sessionValue;
 		this.unsubscribe?.();
 		this.unsubscribe = null;

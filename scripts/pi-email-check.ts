@@ -1,5 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -60,7 +62,14 @@ try {
 	const missing = expected.filter((name) => !registered.has(name));
 	if (missing.length > 0) throw new Error(`missing pi-email tools: ${missing.join(", ")}`);
 
-	console.log(`Vendored pi-email loaded and registered ${expected.length} tools.`);
+	const require = createRequire(import.meta.url);
+	const { simpleParser } = require("mailparser");
+	const utf7 = require("utf7");
+	const mail = await simpleParser('From: sender@example.com\r\nTo: receiver@example.com\r\nSubject: Parsing regression\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Hello <b>world</b> &amp; 中文</p>');
+	assert(mail.text.includes("Hello world & 中文"));
+	const folder = "收件箱/测试";
+	assert.equal(utf7.imap.decode(utf7.imap.encode(folder)), folder);
+	console.log(`Vendored pi-email registered ${expected.length} tools; HTML parsing and IMAP UTF-7 roundtrip passed.`);
 } finally {
 	session?.dispose?.();
 	rmSync(sessionDir, { recursive: true, force: true });

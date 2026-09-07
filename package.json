@@ -1,6 +1,6 @@
 {
   "name": "pi-tgbot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "files": [
     "src/",
@@ -9,6 +9,7 @@
     "scripts/",
     "systemd/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "config.example.json",
     "check-pi-update.sh",
@@ -31,12 +32,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node scripts/patch-web-access-background-notify.mjs && node src/main.ts",
+    "start": "node src/main.ts",
     "probe": "node scripts/probe.ts",
     "check": "tsc --noEmit",
-    "test": "npm run check && npm run test:render && npm run test:delivery && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:session-lifecycle && npm run test:steering && npm run test:idle-watchdog && npm run test:panel && npm run test:poller && npm run test:security && npm run test:upload && npm run test:web-access && npm run test:email && npm run test:skills && npm run publication-check",
+    "test": "npm run check && npm run test:render && npm run test:delivery && npm run test:regressions && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:session-lifecycle && npm run test:steering && npm run test:idle-watchdog && npm run test:panel && npm run test:poller && npm run test:security && npm run test:upload && npm run test:web-access && npm run test:email && npm run test:skills && npm run publication-check",
     "test:render": "node scripts/render-check.ts",
     "test:delivery": "node scripts/live-delivery-check.ts",
+    "test:regressions": "node scripts/reliability-check.ts && node scripts/dispatcher-check.ts && node scripts/media-groups-check.ts",
     "test:redact": "node scripts/redact-check.ts",
     "test:ui": "node scripts/ui-failclosed.ts",
     "test:activity": "node scripts/activity-check.ts",
@@ -49,7 +51,7 @@
     "test:poller": "node scripts/poller-check.ts",
     "test:security": "node scripts/security-check.ts",
     "test:upload": "node scripts/upload-check.ts",
-    "test:web-access": "node scripts/patch-web-access-background-notify.mjs && node scripts/web-access-check.ts",
+    "test:web-access": "node scripts/web-access-check.ts",
     "test:email": "node scripts/pi-email-check.ts",
     "test:skills": "node scripts/skills-check.ts",
     "publication-check": "node scripts/publication-check.mjs"
@@ -57,10 +59,13 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
     "imap": "^0.8.17",
-    "mailparser": "^3.7.2",
+    "mailparser": "3.9.16",
     "nodemailer": "^9.0.3",
     "pi-web-access": "0.18.0",
     "typebox": "1.3.7"
+  },
+  "overrides": {
+    "utf7": { "semver": "5.7.2" }
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

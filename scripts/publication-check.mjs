@@ -41,6 +41,7 @@ const denyNames = [
   /(^|\/)inbox\//i,
   /(^|\/)\.pi-subagents\//i,
   /\.jsonl$/i,
+  /\.deliveries\.json(?:\.tmp)?$/i,
   /\.(?:pem|key|p12|pfx|jks|keystore)$/i,
   /\.bak(?:\.|$)/i,
 ];

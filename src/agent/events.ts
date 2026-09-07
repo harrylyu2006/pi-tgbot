@@ -339,6 +339,10 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 	return function route(generation: number, event: any): void {
 		if (generation !== deps.currentGeneration()) return; // stale session
 		const type = event?.type;
+		// SDK lifecycle events also carry user, toolResult and custom messages.
+		// Role-less legacy test/provider events are accepted, explicit other roles never are.
+		if ((type === "message_start" || type === "message_update" || type === "message_end")
+			&& event.message?.role !== undefined && event.message.role !== "assistant") return;
 
 		// A provider failure (401, rate limit, upstream down) arrives as a message
 		// with stopReason "error" and no text. Swallowing it leaves the operator
@@ -380,6 +384,12 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 				break;
 			}
 			case "message_start":
+				latestAnswer = "";
+				latestThinking = "";
+				latestError = null;
+				latestStop = null;
+				deps.sink.onAnswer("");
+				deps.sink.onThinking("");
 				phase = event.message?.role === "assistant" ? "thinking" : "";
 				replaceTransientActivity();
 				refreshActivity();
@@ -570,8 +580,10 @@ export function createEventRouter(deps: EventRouterDeps): (generation: number, e
 					}
 					break;
 				}
-				if (!latestAnswer.trim() && latestError) {
-					deps.sink.onSettled(`⚠️ **这一轮没能完成** — 模型服务返回了错误：\n\n\`\`\`\n${latestError.slice(0, 700)}\n\`\`\``);
+				if (latestStop === "error" || latestError) {
+					deps.sink.onSettled([latestAnswer, "⚠️ 这一轮没能完成：模型服务返回了错误，详细内容已隐藏。"].filter(Boolean).join("\n\n"));
+				} else if (latestStop === "aborted") {
+					deps.sink.onSettled([latestAnswer, "⏹ 本轮已中断，可能已执行部分操作。"].filter(Boolean).join("\n\n"));
 				} else {
 					deps.sink.onSettled(latestAnswer);
 				}

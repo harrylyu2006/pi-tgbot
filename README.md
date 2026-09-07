@@ -6,13 +6,19 @@
 
 这个项目的重点是：**让 pi 在 Telegram 中真正可用，而且长任务的运行过程足够直观。** 它不是一个以“安全拦截”为主要功能的项目，也不是沙箱。
 
+## v0.1.1 可靠性修复
+
+本版修复运行中 `/new`、无模型扩展命令导致的忙碌卡死、工具结果误渲染、旧流式编辑覆盖最终答案、长回答部分丢失、相册下载竞态、HTML 分段与链接编码等问题。完整变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+最终回答会先写入私有交付队列，再逐段发送；明确的 429 会按 `retry_after` 重试。网络故障后可用 `/retry` 只重发未确认分段，不会重新运行模型或工具。Telegram 不支持消息幂等键，因此超时/进程崩溃边界仍可能出现重复分段，不能承诺 exactly-once。
+
 ## 主要功能
 
 - **Telegram 实时输出**：模型生成正文时持续编辑同一条消息，不必等整轮任务结束；SDK 发出的用户消息事件不会被误当成助手正文，因此不会在“思考中”下方重复显示本轮 Prompt。
 - **实时运行状态**：显示思考、准备调用工具、工具名称、参数摘要、执行进度、重试和上下文压缩等状态。
 - **可见思考内容**：当模型 API 返回可展示的 thinking/reasoning 内容时，会在独立的可折叠引用块中实时显示；如果 provider 返回的思考内容本身以本轮 Prompt 的原文开头，只移除这段开头复述，后续思考照常显示；被 provider 标记为 redacted 的内容不会展示。
 - **长任务不会“假死”**：普通状态更新达到软上限后可以降频，但新的思考内容和正文仍会继续更新。
-- **可靠的最终送达**：较长任务完成后会另发新消息触发 Telegram 通知；超长回答会按 Telegram 限制安全分段。
+- **可恢复的最终送达**：较长任务完成后另发新消息触发通知；超长回答按标签、转义实体和 Unicode 字符安全分段。未确认分段保留在私有 outbox，`/retry` 可恢复；发送结束前不释放当前任务。
 - **持久会话**：服务重启后恢复最近的专用会话；模型和思考等级也会保留。
 - **运行中可追加指令**：Agent 执行期间仍继续接收 Telegram 消息；新消息通过 Pi steering 注入当前运行，在当前 assistant turn（含已开始的工具调用）结束后的下一个模型边界读取，而不是等整轮任务结束再排成独立任务。
 - **操作面板**：查看状态、Token 用量、上下文占用、当前工具，切换模型和思考等级，创建新会话、中断任务或一键重启服务。
@@ -92,7 +98,11 @@ Telegram Bot API
 
 主要源码：
 
-- `src/main.ts`：进程生命周期、任务队列、命令、回调、附件和退出流程。
+- `src/main.ts`：进程生命周期、命令、回调、附件和退出流程。
+- `src/agent/dispatcher.ts`：任务/交付状态机、运行中 steering、串行化 reset/模型切换。
+- `src/telegram/delivery.ts`：持久交付队列、429 重试、HTML 降级和 `/retry`。
+- `src/telegram/media-groups.ts`：按消息到达登记相册，等待下载全部完成并保持消息顺序。
+- `src/agent/web-access.mjs`：Web 扩展适配器，抑制后台成功/失败通知进入模型上下文。
 - `src/agent/host.ts`：pi SDK 初始化、会话恢复、模型/思考等级和扩展加载。
 - `src/agent/events.ts`：过滤事件角色，并把 pi 事件流转换成 Telegram 中可见的正文、思考和工具状态。
 - `src/agent/reasoning.ts`：模型家族的思考档位与 provider 请求兼容。
@@ -238,6 +248,7 @@ journalctl -u pi-tg -f
 - `agentDir`：pi 的设置、认证、模型、技能和上下文目录。
 - `sessionDir`：本 Bot 专用会话目录，不能与交互式 pi 的默认 session 目录混用。
 - `statePath`：保存已见 update、上次任务中断状态、模型和思考等级。
+- `${statePath}.deliveries.json`：自动创建的私有交付队列（0600），保存尚未完整确认送达的回答。备份时一并保留，不要提交到 Git 或公开发布。队列损坏会阻止启动而非静默丢弃；请先备份后排查。
 - `auditPath`：追加写入的工具审计日志；只记录工具名、时间、参数字节数和参数摘要哈希，不保存原始参数或工具结果。
 
 ### 实时消息
@@ -259,7 +270,7 @@ journalctl -u pi-tg -f
 - `tools.deny`：需要停用的工具名，例如只读部署可禁用 `bash`、`write`、`edit`。
 - `tools.extraActive`：额外启用的已注册工具。
 - `extensions`：额外加载的本地路径或 `npm:` specifier。环境中的扩展不会被自动扫描。
-- 内置 `pi-web-access` 始终从本项目依赖目录加载；若在 `extensions` 里重复填写，会自动去重。
+- 内置 `pi-web-access` 通过受版本控制的适配器加载；不再在启动或测试时修改 `node_modules`。`npm start`、直接 Node、systemd 共用该路径，适用于 root-owned 只读代码目录。若在 `extensions` 里重复填写，会自动去重。
 - 内置 `image-describe` skill 随项目打包加载，多模态模型使用原生 `read` 识图，纯文本模型（如 DeepSeek、GLM）支持通过 OpenRouter 进行视觉兜底。
 
 ### 文件
@@ -273,10 +284,11 @@ journalctl -u pi-tg -f
 ## Telegram 命令与面板
 
 - `/start`、`/help`、`/panel`：打开操作面板；
-- `/status`：查看模型、思考等级、上下文和运行状态；
+- `/status`：打开状态视图，查看模型、思考等级、上下文和运行状态；
 - `/tokens`、`/usage`：查看累计 Token、缓存、成本和上下文占用；
 - `/new`：丢弃当前上下文，创建一个新的专用会话；
 - `/stop`：中断当前 Agent 任务。
+- `/retry`：仅重发 outbox 中未确认送达的回答分段，不重新运行任务；需等待当前任务结束。
 
 面板还支持：
 
@@ -338,7 +350,7 @@ journalctl -u pi-tg -f
 - SDK 的用户消息事件不会进入助手正文渲染，避免实时消息重复显示 Prompt；
 - Bot 的 callback 带进程和 session generation 标识，旧按钮不能操作新会话；
 - `config.json`、凭证、模型目录、session、日志、inbox、本地审计报告和 `web-search.json` 默认被 Git 忽略；
-- journald 不记录完整 Prompt、模型正文、聊天/消息/session ID、用户名、模型名、私有路径或原始错误正文；
+- journald 对 Prompt、模型正文、聊天/消息/session ID 等字段进行省略；错误诊断会记录经启发式脱敏的短消息及栈位置，仍可能带有私有路径或非典型敏感内容，应按私人日志保护；
 - 发往 Telegram 的模型输出会尝试遮盖常见 API Key、Bot Token、JWT、私钥块和带密码的数据库 URL；
 - 工具审计不保存原始参数或工具结果，只保留参数字节数和摘要哈希；
 - `publication-check` 检查常见敏感文件名、凭证格式，并默认拒绝图片资产（图片需先人工隐私审查）；
@@ -405,7 +417,7 @@ systemctl restart pi-tg
 - Telegram 409 表示另一个 webhook 或 long-poll consumer 正在使用相同 Token；
 - 启动时删除已有 webhook，因为本项目使用 long polling；
 - Telegram 429 的 `retry_after`；
-- 卡住的非装饰性 Telegram API 请求会换新连接重试一次。
+- 卡住的可幂等 Telegram API 请求会换新连接重试一次；`sendMessage` 超时不盲目重试，以免重复发送。最终正文的未确认分段保留供 `/retry`。
 
 `check-pi-update.sh` 可选地检查 pi SDK 新版本，并通过同一个 Bot 发送升级提醒：
 
@@ -413,7 +425,7 @@ systemctl restart pi-tg
 PI_TG_CONFIG=/etc/pi-tg/config.json /opt/pi-tg/check-pi-update.sh
 ```
 
-升级前请先备份必要配置和 session；不要覆盖或删除旧数据后再假设一定能恢复。
+升级前请先备份必要配置、session、state 及交付队列；不要覆盖或删除旧数据后再假设一定能恢复。依赖升级后运行 `npm test` 和 `npm audit --omit=dev`，确认当前任务结束后再重启。v0.1.1 锁定 mailparser 3.9.16，并将 utf7 的 semver 传递依赖覆盖为 5.7.2，以修复已披露漏洞。
 
 ## 公开 Fork 前的隐私检查
 
@@ -461,8 +473,8 @@ npm test
 修改时应保持以下行为：
 
 - Telegram polling 不能等待 Agent 任务结束；
-- 只有 `agent_settled` 才能释放 dispatcher；
-- 用户角色的消息事件不能进入助手正文或思考渲染；
+- 真实 Agent run 必须等待 `agent_settled` 和最终交付收束才释放 dispatcher；被扩展直接处理、从未启动 Agent 的命令不能等待不存在的 settled 事件；
+- 用户、toolResult 和 custom 等非助手角色不能进入助手正文或思考渲染；
 - 旧 session generation 的事件不能渲染到新会话；
 - 每一个流式前缀都必须生成结构闭合的 Telegram HTML；
 - 工具参数、工具输出和思考内容的实时展示必须有长度边界；

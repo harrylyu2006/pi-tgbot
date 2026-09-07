@@ -1,0 +1,16 @@
+import assert from "node:assert/strict";
+import { MediaGroups, type Album } from "../src/telegram/media-groups.ts";
+const wait = () => new Promise((r) => setTimeout(r, 30));
+const albums: Album[] = [];
+const groups = new MediaGroups((a) => albums.push(a), 10);
+const fast = groups.add("same", 1, 2, "");
+const slow = groups.add("same", 1, 1, "compare both");
+fast({ paths: ["fast.png"], rejected: [] });
+await wait(); assert.equal(albums.length, 0, "quiet window must wait for pending downloads");
+slow({ paths: ["slow.png"], rejected: [] });
+assert.equal(albums.length, 1); assert.deepEqual(albums[0]!.items.map((i) => i.messageId), [1, 2]);
+assert.equal(albums[0]!.items[0]!.caption, "compare both");
+slow({ paths: [], rejected: [] }); assert.equal(albums.length, 1, "duplicate completion ignored");
+const failed = groups.add("error", 1, 3, ""); failed({ paths: [], rejected: ["download failed"] }); await wait(); assert.equal(albums.length, 2);
+const cancelled = groups.add("closed", 1, 4, ""); groups.close(); cancelled({ paths: ["late.png"], rejected: [] }); await wait(); assert.equal(albums.length, 2);
+console.log("Media group regressions passed: slow/out-of-order downloads, failures and shutdown.");

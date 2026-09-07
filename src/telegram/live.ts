@@ -25,6 +25,7 @@ import { closeOpenTags, esc, stripTags } from "./html.ts";
 import { compileBlocks } from "./markdown.ts";
 import { redactOutbound } from "./redact.ts";
 import { packBlocks, packTail } from "./chunk.ts";
+import { DeliveryStore, retryThrottled, sendChunk, sleep } from "./delivery.ts";
 
 /**
  * Some providers begin reasoning by echoing the prompt verbatim before adding
@@ -61,16 +62,18 @@ export interface LiveMessageOptions {
 	 * themselves the moment they are accepted, before they start running).
 	 */
 	existingMessageId?: number;
+	/** Persist unsent final chunks before attempting network delivery. */
+	deliveryStore?: DeliveryStore;
+	/** Injectable retry clock for deterministic tests. */
+	wait?: (ms: number) => Promise<void>;
 }
+
+export interface DeliveryResult { complete: boolean; delivered: number; total: number }
 
 function fmtElapsed(ms: number): string {
 	const s = Math.round(ms / 1000);
 	if (s < 60) return `${s} 秒`;
 	return `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class LiveMessage {
@@ -91,6 +94,8 @@ export class LiveMessage {
 	private editCount = 0;
 	private timer: NodeJS.Timeout | null = null;
 	private inFlight = false;
+	private activeFlush: Promise<void> | null = null;
+	private terminal: Promise<DeliveryResult> | null = null;
 	private pending = false;
 	private suppressedUntil = 0;
 	/** Wall time lost to stalled edits since the last successful one. */
@@ -194,7 +199,7 @@ export class LiveMessage {
 		if (this.thinking) {
 			const thinkingBlocks = compileBlocks(this.thinking);
 			blocks.push(`<b>💭 思考过程</b>`);
-			blocks.push(...thinkingBlocks.map((block) => `<blockquote expandable>${block}</blockquote>`));
+			blocks.push(...thinkingBlocks.map((block) => `<blockquote expandable>${esc(stripTags(block))}</blockquote>`));
 		}
 		if (this.answer) blocks.push(...compileBlocks(this.answer));
 		if (blocks.length === 0) return esc("⏳ …");
@@ -236,21 +241,30 @@ export class LiveMessage {
 				// reproduce it, then deliver the content anyway — losing an answer
 				// to a rendering bug is the worst possible outcome.
 				this.log.error({ msg: "HTML rejected, falling back to plain text", bodyChars: body.length });
-				const plain = stripTags(body).slice(0, this.opts.maxChars);
-				await this.api
-					.editMessageText({ chat_id: this.opts.chatId, message_id: this.messageId, text: plain })
-					.then(() => {
-						this.lastSentBody = plain;
-					})
-					.catch((e: unknown) => this.log.warn({ msg: "plain-text fallback also failed", ...errFields(e) }));
+				const plain = stripTags(body);
+				try {
+					await this.api.editMessageText({ chat_id: this.opts.chatId, message_id: this.messageId, text: plain });
+				} catch (fallbackError) {
+					if (!isNotModified(fallbackError)) throw fallbackError;
+				}
+				this.lastSentBody = body;
 				return;
 			}
 			throw err;
 		}
 	}
 
-	private async flush(): Promise<void> {
-		if (this.messageId === null) return;
+	private flush(): Promise<void> {
+		if (this.closed) return Promise.resolve();
+		if (this.activeFlush) { this.pending = true; return this.activeFlush; }
+		const task = this.flushFrame().catch((err) => this.log.warn({ msg: "live render failed", ...errFields(err) }));
+		this.activeFlush = task;
+		void task.then(() => { if (this.activeFlush === task) this.activeFlush = null; });
+		return task;
+	}
+
+	private async flushFrame(): Promise<void> {
+		if (this.messageId === null || this.closed) return;
 		if (this.inFlight) {
 			this.pending = true;
 			return;
@@ -260,13 +274,14 @@ export class LiveMessage {
 		if (Date.now() < this.suppressedUntil) return;
 
 		const body = this.compose();
-		if (body === this.lastSentBody) return; // Telegram 400s on unmodified edits
+		const revision = this.contentRevision;
+		if (body === this.lastSentBody) { this.sentContentRevision = revision; return; } // Telegram 400s on unmodified edits
 
 		this.inFlight = true;
 		const attemptStartedAt = Date.now();
 		try {
 			await this.edit(body);
-			this.sentContentRevision = this.contentRevision;
+			this.sentContentRevision = revision;
 			this.lastEditAt = Date.now();
 			this.editCount++;
 			// A recovered stall is invisible otherwise: the operator saw a frozen
@@ -284,123 +299,82 @@ export class LiveMessage {
 				this.suppressedUntil = Date.now() + wait;
 				this.log.warn({ msg: "throttled, suppressing edits", waitMs: wait });
 			} else {
+				this.suppressedUntil = Date.now() + 5000;
 				this.log.warn({ msg: "edit failed", ...errFields(err) });
 			}
+			this.pending = true;
 		} finally {
 			this.inFlight = false;
-			if (this.pending) {
+			if (this.pending || this.contentRevision > this.sentContentRevision) {
 				this.pending = false;
 				this.schedule();
 			}
 		}
 	}
 
-	/**
-	 * Final render: one unthrottled edit with the head of the answer, then any
-	 * overflow as follow-up messages so nothing is dropped.
-	 */
-	async finish(finalText: string): Promise<void> {
-		if (this.timer !== null) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-		const { text: safeFinal } = redactOutbound(finalText);
-		this.answer = safeFinal;
-		this.activity = "";
+	/** One terminal writer owns delivery; repeated finish/seal calls share it. */
+	finish(finalText: string): Promise<DeliveryResult> {
+		if (this.terminal) return this.terminal;
 		this.closed = true;
-
-		const blocks = compileBlocks(safeFinal.trim());
-		const chunks = blocks.length > 0 ? packBlocks(blocks, this.opts.maxChars) : [esc("（无输出）")];
-
-		if (this.messageId === null) {
-			await this.begin(safeFinal.slice(0, 200) || "（无输出）");
-			return;
-		}
-
-		const elapsed = Date.now() - this.createdAt;
-		const notify = elapsed >= this.opts.notifyAfterMs;
-
-		if (notify) {
-			// Deliver the answer BEFORE replacing the live message with a receipt.
-			// Telegram can throttle the first send after a long, edit-heavy turn. The
-			// old ordering collapsed the only copy to "结果见下", then dropped the
-			// answer on 429 while incorrectly logging success.
-			let delivered = 0;
-			for (const chunk of chunks) {
-				let sent = false;
-				for (let attempt = 0; attempt < 4; attempt++) {
-					try {
-						await this.api.sendMessage({
-							chat_id: this.opts.chatId,
-							text: closeOpenTags(chunk),
-							parse_mode: "HTML",
-							link_preview_options: { is_disabled: true },
-						});
-						sent = true;
-						break;
-					} catch (err) {
-						this.log.warn({ msg: "notification send failed", attempt: attempt + 1, ...errFields(err) });
-						if (!(err instanceof TgError) || err.kind !== "throttled" || attempt === 3) break;
-						await sleep(Math.max(1, err.retryAfter ?? 5) * 1_000 + 250);
-					}
-				}
-				if (!sent) break;
-				delivered++;
-			}
-
-			if (delivered === chunks.length) {
-				await this.edit(`<i>✅ 完成 · 用时 ${esc(fmtElapsed(elapsed))} · 结果已另发</i>`).catch((err: unknown) =>
-					this.log.warn({ msg: "receipt edit failed", ...errFields(err) }),
-				);
-				this.log.info({ msg: "delivered as new message for notification", elapsedMs: elapsed, chunks: delivered });
-				return;
-			}
-
-			// Fail-safe: if even the retry budget could not send the first chunk,
-			// preserve the answer in the existing live message. Never leave a receipt
-			// that promises a result which was not delivered.
-			if (delivered === 0) {
-				const first = chunks[0] ?? esc("（无输出）");
-				await this.edit(closeOpenTags(first)).catch((err: unknown) =>
-					this.log.warn({ msg: "notification fallback edit failed", ...errFields(err) }),
-				);
-			}
-			this.log.warn({ msg: "notification delivery incomplete", elapsedMs: elapsed, delivered, totalChunks: chunks.length });
-			return;
-		}
-
-		const first = chunks[0] ?? esc("（无输出）");
-		if (first !== this.lastSentBody) {
-			await this.edit(closeOpenTags(first)).catch((err: unknown) => this.log.warn({ msg: "final edit failed", ...errFields(err) }));
-		}
-
-		for (const chunk of chunks.slice(1)) {
-			try {
-				await this.api.sendMessage({
-					chat_id: this.opts.chatId,
-					text: closeOpenTags(chunk),
-					parse_mode: "HTML",
-					link_preview_options: { is_disabled: true },
-				});
-			} catch (err) {
-				this.log.warn({ msg: "continuation send failed", ...errFields(err) });
-				break;
-			}
-		}
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = null;
+		this.answer = redactOutbound(finalText).text;
+		this.activity = "";
+		this.terminal = this.deliverFinal();
+		return this.terminal;
 	}
 
-	/** Called on shutdown so an in-flight turn leaves a readable trace. */
-	async sealWith(note: string): Promise<void> {
-		if (this.messageId === null || this.closed) return;
-		this.closed = true;
-		if (this.timer !== null) {
-			clearTimeout(this.timer);
-			this.timer = null;
+	private async deliverFinal(): Promise<DeliveryResult> {
+		// A completed old edit must never land after the final edit/receipt.
+		await this.activeFlush;
+		const chunks = packBlocks(compileBlocks(this.answer.trim()), this.opts.maxChars);
+		if (!chunks[0]) chunks[0] = esc("（无输出）");
+		const store = this.opts.deliveryStore;
+		const record = store?.create(this.opts.chatId, chunks);
+		const wait = this.opts.wait ?? sleep;
+		const elapsed = Date.now() - this.createdAt;
+		const notify = elapsed >= this.opts.notifyAfterMs;
+		let delivered = 0;
+		let usedExisting = false;
+		for (let i = 0; i < chunks.length; i++) {
+			const chunk = chunks[i]!;
+			try {
+				if (i === 0 && !notify && this.messageId !== null) {
+					try { await retryThrottled(() => this.edit(chunk), wait); usedExisting = true; }
+					catch { await sendChunk(this.api, this.opts.chatId, chunk, wait); }
+				} else {
+					try { await sendChunk(this.api, this.opts.chatId, chunk, wait); }
+					catch (err) {
+						if (i !== 0 || this.messageId === null) throw err;
+						await retryThrottled(() => this.edit(chunk), wait);
+						usedExisting = true;
+					}
+				}
+				delivered++;
+				if (record) store!.advance(record.id, delivered);
+			} catch (err) {
+				this.log.warn({ msg: "final delivery incomplete", delivered, totalChunks: chunks.length, ...errFields(err) });
+				const note = store ? "⚠️ 回答未完整送达，未确认分段已保存。发送 /retry 重发；网络超时可能造成重复分段。"
+					: "⚠️ 回答未完整送达，请稍后重试。";
+				// Never erase the only delivered first chunk to show a receipt.
+				try {
+					if (this.messageId !== null && !usedExisting) await retryThrottled(() => this.edit(esc(note)), wait);
+					else await sendChunk(this.api, this.opts.chatId, esc(note), wait);
+				} catch { /* Durable outbox remains available even if Telegram is offline. */ }
+				return { complete: false, delivered, total: chunks.length };
+			}
 		}
-		const body = closeOpenTags(`${this.compose()}\n\n<i>${esc(note)}</i>`.slice(0, this.opts.maxChars));
-		await this.edit(body).catch(() => {
-			/* best effort during shutdown */
-		});
+		if (!usedExisting && this.messageId !== null) {
+			await retryThrottled(() => this.edit(`<i>✅ 完成 · 用时 ${esc(fmtElapsed(elapsed))} · 结果已另发</i>`), wait)
+				.catch((err) => this.log.warn({ msg: "receipt edit failed", ...errFields(err) }));
+		}
+		return { complete: true, delivered, total: chunks.length };
+	}
+
+	/** Shutdown waits for an existing final delivery instead of racing it. */
+	async sealWith(note: string): Promise<void> {
+		if (this.terminal) { await this.terminal; return; }
+		await this.finish([this.answer, note].filter(Boolean).join("\n\n"));
 	}
 
 	get stats(): { edits: number; messageId: number | null } {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,15 +12,7 @@ import {
 const cwd = process.cwd();
 const agentDir = process.env.PI_TG_TEST_AGENT_DIR ?? join(tmpdir(), "pi-tgbot-test-agent");
 const sessionDir = mkdtempSync(join(tmpdir(), "pi-tgbot-web-access-"));
-const webAccessPath = fileURLToPath(new URL("../node_modules/pi-web-access", import.meta.url));
-const webAccessEntry = fileURLToPath(new URL("../node_modules/pi-web-access/index.ts", import.meta.url));
-const webAccessSource = readFileSync(webAccessEntry, "utf8");
-if (webAccessSource.includes('customType: "web-search-content-ready"')) {
-	throw new Error("pi-web-access background content-ready status must not be injected into the agent session");
-}
-if (!webAccessSource.includes("Headless host: fetched data is already stored by appendEntry()")) {
-	throw new Error("pi-web-access background content-ready patch marker is missing");
-}
+const webAccessPath = fileURLToPath(new URL("../src/agent/web-access.mjs", import.meta.url));
 
 let session: any;
 try {
@@ -36,7 +28,7 @@ try {
 
 	const loaded = loader.getExtensions();
 	const paths = (loaded.extensions ?? []).map((entry: any) => String(entry.resolvedPath ?? entry.path));
-	if (!paths.some((path: string) => path.includes("pi-web-access"))) {
+	if (!paths.some((path: string) => path.includes("web-access.mjs"))) {
 		throw new Error(`pi-web-access did not load: ${JSON.stringify({ paths, errors: loaded.errors ?? [] })}`);
 	}
 
@@ -63,7 +55,17 @@ try {
 		}
 	}
 
-	console.log("Bundled pi-web-access loaded and registered all four web capabilities.");
+	// Test the scoped policy without importing upstream twice or mutating it.
+	const policyPath = new URL("../src/agent/web-access-policy.mjs", import.meta.url).href;
+	const adapter = await import(policyPath);
+	const sent: unknown[] = [], saved: unknown[] = [];
+	const wrapped = adapter.withoutBackgroundPrompts({ sendMessage: (...args: unknown[]) => sent.push(args), appendEntry: (...args: unknown[]) => saved.push(args) });
+	for (const customType of ["web-search-content-ready", "web-search-error"]) {
+		wrapped.sendMessage({ customType, content: "private diagnostic" }, { triggerTurn: true });
+	}
+	wrapped.sendMessage({ customType: "real-user-command", content: "ok" }, { triggerTurn: true });
+	if (sent.length !== 1 || saved.length !== 1 || JSON.stringify(saved).includes("private diagnostic")) throw new Error("background prompt policy failed");
+	console.log("Web adapter registered four capabilities and suppressed success/error background prompts.");
 } finally {
 	session?.dispose?.();
 	rmSync(sessionDir, { recursive: true, force: true });

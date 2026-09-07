@@ -44,6 +44,8 @@ export default function (pi) {
   pi.on("session_shutdown", (event) => {
     appendFileSync(marker, JSON.stringify({ type: "shutdown", reason: event.reason }) + "\\n");
   });
+  pi.registerCommand("local-noop", { description: "Test command without model run", handler() {} });
+  pi.on("input", (event) => event.text === "handled-input" ? { action: "handled" } : { action: "continue" });
   pi.registerTool({
     name: "lifecycle_probe",
     label: "Lifecycle Probe",
@@ -66,6 +68,7 @@ const log = {
 	child() { return this; },
 } as any;
 
+const observed: string[] = [];
 const host = new AgentHost({
 	config: {
 		botToken: "unused",
@@ -81,7 +84,7 @@ const host = new AgentHost({
 		extensions: [extensionPath],
 	} as any,
 	log,
-	onEvent() {},
+	onEvent(_generation, event) { observed.push(event.type); },
 	onAbortRequested() {},
 	onShutdownRequested() {},
 });
@@ -98,7 +101,25 @@ try {
 	const firstTool = firstSession.getAllTools().find((tool: any) => tool.name === "lifecycle_probe");
 	ok("初始会话扩展工具可用", Boolean(firstTool));
 
-	await host.reset();
+	// Commands and handled hooks resolve with no model run/settled event.
+	observed.length = 0;
+	await firstSession.prompt("/local-noop");
+	await firstSession.prompt("handled-input");
+	ok("SDK 本地命令不会发出 agent_settled", !observed.includes("agent_settled"));
+
+	// Exercise SDK run/abort ordering offline, with a fake low-level agent.
+	let started!: () => void;
+	const active = new Promise<void>((r) => { started = r; });
+	let release!: () => void;
+	firstSession.agent.prompt = async () => { started(); await new Promise<void>((r) => { release = r; }); };
+	firstSession.agent.abort = () => release();
+	const run = firstSession.prompt("offline active run");
+	await active;
+	const resetting = host.reset();
+	ok("并发 reset 复用同一次替换", resetting === host.reset());
+	await resetting;
+	await run;
+	ok("active reset 在退订之前接收到旧 agent_settled", observed.includes("agent_settled"));
 	const secondSession = host.session as any;
 	const secondTool = secondSession.getAllTools().find((tool: any) => tool.name === "lifecycle_probe");
 	ok("新会话重新注册扩展工具", Boolean(secondTool));

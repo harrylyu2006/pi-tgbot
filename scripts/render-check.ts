@@ -135,7 +135,7 @@ console.log("[3b] nested tag repair");
 {
 	const malformedNested = '<blockquote expandable><b>thinking</blockquote>';
 	const repaired = closeOpenTags(malformedNested);
-	if (repaired === malformedNested) console.log("  ✓ outer close removes stale inner tag from repair stack");
+	if (repaired === '<blockquote expandable><b>thinking</b></blockquote>') console.log("  ✓ inner formatting closes before its outer block");
 	else fail("outer close left a stale inner tag in the repair stack", repaired);
 }
 
