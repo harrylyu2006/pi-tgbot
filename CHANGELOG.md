@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Fix inherited Telegram menus when reusing a Bot Token: synchronize operator-chat, all-private-chats and default scopes, including fallback/English/Chinese variants.
+- Verify commands after updates instead of logging success for a default list hidden by a higher-priority old menu; replace in place without deleting lists first.
+- Add `npm run menu-sync -- /path/to/config.json` for updating command metadata without restarting, polling or creating an agent session.
+- Share the command definitions between daemon and maintenance script; add scope-precedence, localization, idempotence and transport regression tests.
+
 ## 0.1.1
 
 ### Fixed

@@ -15,6 +15,7 @@ import { TgError } from "../errors.ts";
 import { errFields, type Logger } from "../log.ts";
 import type { TelegramApi } from "./api.ts";
 import type { TgUpdate } from "./types.ts";
+import { syncCommandMenu } from "./menu.ts";
 
 const ALLOWED_UPDATES = ["message", "callback_query"];
 // 10s, not 30s. The Telegram path from this box intermittently wedges: the
@@ -104,21 +105,9 @@ export class Poller {
 			await this.api.deleteWebhook(this.abort.signal);
 		}
 
-		// Clear stale command lists left by a previous bot under the same token:
-		// the default scope and the private-chat scope are the ones that actually
-		// show in the slash menu. Telegram returns 400 for the admin/member scopes
-		// in a 1:1 chat, so they are not attempted.
-		await this.api
-			.deleteMyCommands({}, this.abort.signal)
-			.catch((err: unknown) => this.log.warn({ msg: "deleteMyCommands default failed (non-fatal)", ...errFields(err) }));
-		await this.api
-			.deleteMyCommands({ scope: { type: "chat", chat_id: this.opts.allowedUserId } }, this.abort.signal)
-			.catch((err: unknown) => this.log.warn({ msg: "deleteMyCommands chat scope failed (non-fatal)", ...errFields(err) }));
-
-		await this.api
-			.setMyCommands(this.opts.commands, this.abort.signal)
-			.then(() => this.log.info({ msg: "slash menu registered", commands: this.opts.commands.map((c) => c.command) }))
-			.catch((err: unknown) => this.log.warn({ msg: "setMyCommands failed (non-fatal)", ...errFields(err) }));
+		await syncCommandMenu(this.api, this.opts.allowedUserId, this.opts.commands, this.abort.signal)
+			.then(() => this.log.info({ msg: "slash menu scopes verified" }))
+			.catch((err: unknown) => this.log.warn({ msg: "command menu sync failed (non-fatal)", ...errFields(err) }));
 	}
 
 	/** Runs until `stop()`. Resolves only on shutdown. */

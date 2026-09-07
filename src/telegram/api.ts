@@ -130,8 +130,13 @@ export class TelegramApi {
 		return this.call<boolean>("deleteWebhook", { drop_pending_updates: false }, { signal, timeoutMs: 15_000 });
 	}
 
-	setMyCommands(commands: Array<{ command: string; description: string }>, signal?: AbortSignal): Promise<boolean> {
-		return this.call<boolean>("setMyCommands", { commands }, { signal, timeoutMs: 15_000 });
+	setMyCommands(commands: Array<{ command: string; description: string }>, signal?: AbortSignal,
+		params?: { scope?: unknown; language_code?: string }): Promise<boolean> {
+		return this.call<boolean>("setMyCommands", { ...params, commands }, { signal, timeoutMs: 15_000 });
+	}
+
+	getMyCommands(params?: { scope?: unknown; language_code?: string }, signal?: AbortSignal): Promise<Array<{ command: string; description: string }>> {
+		return this.call("getMyCommands", params ?? {}, { signal, timeoutMs: 15_000 });
 	}
 
 	/**

@@ -4,6 +4,7 @@ import { createLogger, errFields, setLevel } from "./log.ts";
 import { TgError } from "./errors.ts";
 import { TelegramApi } from "./telegram/api.ts";
 import { Poller } from "./telegram/poller.ts";
+import { COMMANDS } from "./telegram/commands.ts";
 import { LiveMessage } from "./telegram/live.ts";
 import { AgentHost } from "./agent/host.ts";
 import { Dispatcher } from "./agent/dispatcher.ts";
@@ -73,12 +74,6 @@ const host: AgentHost = new AgentHost({
 		createAskTool({ ui: telegramUI, log: log.child("ask") })],
 	uiContext: telegramUI,
 });
-const COMMANDS = [
-	{ command: "start", description: "操作面板" }, { command: "tokens", description: "Token 用量统计" },
-	{ command: "status", description: "当前状态" }, { command: "new", description: "开一个新会话（清空上下文）" },
-	{ command: "stop", description: "中断当前任务" }, { command: "help", description: "帮助" },
-	{ command: "retry", description: "重发未确认送达的回答（不重跑任务）" },
-];
 const poller = new Poller(api, log.child("poll"), {
 	allowedUserId: config.allowedUserId, commands: COMMANDS, onUpdate: handleUpdate, onFatal: (err) => { fatal = err; },
 });
