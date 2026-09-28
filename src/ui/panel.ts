@@ -138,7 +138,7 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 
 	if (view === "tokens") {
 		const stats = session.getSessionStats() as {
-			tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+			tokens?: { input?: number; output?: number; cacheRead?: number; total?: number };
 			cost?: number;
 			userMessages?: number;
 			assistantMessages?: number;
@@ -159,7 +159,6 @@ export async function renderPanel(ctx: PanelContext, view: string): Promise<Pane
 			`<code>输入      ${n(t.input).padStart(12)}</code>`,
 			`<code>输出      ${n(t.output).padStart(12)}</code>`,
 			`<code>缓存读取  ${n(t.cacheRead).padStart(12)}</code>`,
-			`<code>缓存写入  ${n(t.cacheWrite).padStart(12)}</code>`,
 			`<code>合计      ${n(t.total).padStart(12)}</code>`,
 		];
 		// Cache hit rate is the number that actually explains the bill on a relay

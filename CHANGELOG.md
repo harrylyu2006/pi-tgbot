@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3
+
+### Changed
+
+- Hide the cache-write row in the Telegram usage panel. Keep cache reads, hit rate, cost, current context and SDK-reported totals unchanged; hidden cache-write tokens can still contribute to the total.
+- Add usage-panel regressions for absent, zero and nonzero cache-write statistics.
+
+### Security
+
+- Pin Nodemailer to 9.1.1 and Mailparser to 3.9.20, using the same patched Nodemailer for SMTP and inbound message parsing. Keep the vendored extension's dependency declarations aligned.
+- Address Nodemailer advisories GHSA-2x7j-588g-ccc2 (address-parser denial of service), GHSA-wmmp-3585-3rmp and GHSA-cc9r-2j5m-2m83 (recipient-domain validation), and GHSA-8m3c-c648-2xjj (legacy plugin content-resolution access controls).
+- Add offline MIME/attachment/threading, Bcc privacy and legacy file/URL access-control regressions. No real mailbox or SMTP credentials are used by these tests.
+
+### Upgrade notes
+
+- Back up configuration, sessions, state and the private delivery outbox before updating dependencies. Install with `npm ci --ignore-scripts`, run `npm test`, and restart only when the active task has finished.
+- Pi SDK and pi-web-access remain at 0.84.1 and 0.18.0 respectively; this release does not migrate session data.
+
 ## 0.1.2
 
 - Fix inherited Telegram menus when reusing a Bot Token: synchronize operator-chat, all-private-chats and default scopes, including fallback/English/Chinese variants.

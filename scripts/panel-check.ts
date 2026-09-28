@@ -53,5 +53,19 @@ ok("压缩后未知 usage 不抛错", unknownUsage.text.includes("—"));
 const absentUsage = await renderPanel({ ...ctx, host: { ...ctx.host, session: { ...session, getContextUsage: () => undefined } } }, "status");
 ok("缺失 usage 不抛错", absentUsage.text.includes("—"));
 
+console.log("用量面板：");
+const sparseTokens = await renderPanel(ctx, "tokens");
+ok("缺少明细时用量面板仍正常显示", sparseTokens.text.includes("本会话累计") && sparseTokens.text.includes("当前上下文"));
+ok("缺少缓存写入时不显示该字段", !sparseTokens.text.includes("缓存写入"));
+for (const cacheWrite of [0, 400]) {
+	const tokens = { input: 1000, output: 200, cacheRead: 3000, cacheWrite, total: 4200 + cacheWrite };
+	const usage = await renderPanel({ ...ctx, host: { ...ctx.host, session: { ...session, getSessionStats: () => ({ tokens, cost: 0.125 }) } } }, "tokens");
+	ok(`缓存写入为 ${cacheWrite} 时不显示该字段`, !usage.text.includes("缓存写入"));
+	ok("保留输入、输出和缓存读取", /输入\s+1,000/.test(usage.text) && /输出\s+200/.test(usage.text) && /缓存读取\s+3,000/.test(usage.text));
+	ok("合计仍使用 SDK 统计，不扣除隐藏字段", usage.text.includes(`<code>合计      ${tokens.total.toLocaleString("en-US").padStart(12)}</code>`));
+	ok("保留命中率、费用和当前上下文", usage.text.includes("缓存命中率：75.0%") && usage.text.includes("费用：$0.1250") && usage.text.includes("100 / 1,000（10.00%）"));
+	ok("保留用量刷新按钮", usage.markup.inline_keyboard.flat().some((b) => b.text === "🔄 刷新" && decodeCallback(b.callback_data!)?.arg === "tokens"));
+}
+
 console.log(failures === 0 ? "\nPANEL CHECK PASSED" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
