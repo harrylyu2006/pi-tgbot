@@ -3,8 +3,15 @@
 # Usage: PI_TG_CONFIG=/etc/pi-tg/config.json ./check-pi-update.sh
 set -euo pipefail
 
-CONFIG="${PI_TG_CONFIG:-/etc/pi-tg/config.json}"
 ROOT="${PI_TG_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+if [[ -n "${HOME:-}" && -d "${HOME}/.nvm/current/bin" ]]; then
+  export PATH="${HOME}/.nvm/current/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+fi
+DEFAULT_CONFIG="/etc/pi-tg/config.json"
+if [[ ! -f "$DEFAULT_CONFIG" && -f "$ROOT/config.json" ]]; then
+  DEFAULT_CONFIG="$ROOT/config.json"
+fi
+CONFIG="${PI_TG_CONFIG:-$DEFAULT_CONFIG}"
 PKG="@earendil-works/pi-coding-agent"
 
 read_config() {

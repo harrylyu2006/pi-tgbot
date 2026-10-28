@@ -1,8 +1,8 @@
 # @patimweb/pi-email 1.4.1 — 本地补丁
 
-## 依赖安全基线（pi-tgbot 0.1.3）
+## 依赖安全基线（pi-tgbot 0.1.4）
 
-根项目及 vendored 扩展固定 Mailparser 3.9.20 / Nodemailer 9.1.1，让入站解析与 SMTP 共用已修复的版本，不跨到 Nodemailer 10。相关公告：GHSA-2x7j-588g-ccc2、GHSA-wmmp-3585-3rmp、GHSA-cc9r-2j5m-2m83、GHSA-8m3c-c648-2xjj。
+根项目及 vendored 扩展固定 Mailparser 3.12.4 / Nodemailer 10.2.1，让入站解析与 SMTP 共用同一套已修复版本。相关公告：GHSA-2x7j-588g-ccc2、GHSA-wmmp-3585-3rmp、GHSA-cc9r-2j5m-2m83、GHSA-8m3c-c648-2xjj。
 
 根目录 `npm run test:email` 同时运行工具加载/解析检查和离线 MIME、附件、回复线程、密送隐私、旧式插件文件/URL 访问限制回归；不使用真实邮箱凭证。
 

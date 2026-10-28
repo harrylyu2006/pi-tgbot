@@ -30,8 +30,8 @@
   },
   "dependencies": {
     "imap": "^0.8.17",
-    "mailparser": "3.9.20",
-    "nodemailer": "9.1.1",
+    "mailparser": "3.12.4",
+    "nodemailer": "10.2.1",
     "typebox": "^1.2.8"
   },
   "publishConfig": {

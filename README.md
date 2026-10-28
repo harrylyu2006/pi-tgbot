@@ -6,11 +6,22 @@
 
 这个项目的重点是：**让 pi 在 Telegram 中真正可用，而且长任务的运行过程足够直观。** 它不是一个以“安全拦截”为主要功能的项目，也不是沙箱。
 
+## v0.1.4 会话兼容、重启命令与发布隐私检查
+
+- 修复官方 Anthropic 模型恢复旧会话时，因系统提示词、工具清单或早期消息变化导致的 thinking 签名 400。adaptive 模式使用官方 `drop_block` 策略，不通过清空聊天来规避问题。
+- 修复 Sonnet 5.5 的关闭思考参数，并为 Haiku 5.5 保留对应的独立行为；增加同一会话重启、流式正文和用量统计回归测试。
+- 修复 OpenAI TPM/RPM 429 限流报错因末尾附带 `/account/billing` 帮助链接而被 `pi-ai` 误判为不可重试账单错误的问题，并默认开启 provider HTTP 层 `retry-after` 限流重试（最多 3 次、单次上限 60s）。
+- 新增 `/restart` 命令并同步 Telegram 菜单。此命令会中断正在运行的任务；会话恢复仍使用已有的持久化机制。
+- 邮件运行时更新为 Nodemailer **10.2.1** / Mailparser **3.12.4**，根项目和 vendored 扩展声明保持一致。
+- 发布扫描新增 `--staged`，检查 Git 暂存区实际内容而不是未提交的工作副本；忽略依赖备份和本地部署资料，并补充隐私检查回归测试。
+
+pi SDK 仍固定为 **0.84.1**，`pi-web-access` 仍为 **0.18.0**。本版不是 SDK 大版本升级，也不宣称依赖已零漏洞，见下方「已知依赖风险」。完整历史见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## v0.1.3 用量界面与邮件依赖修复
 
 用量面板不再显示「缓存写入」一行，保留缓存读取、命中率、费用和当前上下文。合计仍使用 SDK 的完整统计，因此可能包含未单列的缓存写入量。
 
-邮件依赖固定为 Nodemailer 9.1.1 / Mailparser 3.9.20，修复已披露的地址解析、收件域名校验和旧式插件内容读取权限问题。新增离线邮件格式、附件、回复线程、密送隐私和文件/URL 访问限制回归测试，不连接真实邮箱、不发送真实邮件。
+当时的邮件依赖固定为 Nodemailer 9.1.1 / Mailparser 3.9.20（v0.1.4 已更新），修复已披露的地址解析、收件域名校验和旧式插件内容读取权限问题。新增离线邮件格式、附件、回复线程、密送隐私和文件/URL 访问限制回归测试，不连接真实邮箱、不发送真实邮件。
 
 ## v0.1.2 菜单迁移修复
 
@@ -40,7 +51,7 @@ npm run menu-sync -- /etc/pi-tg/config.json
 - **持久会话**：服务重启后恢复最近的专用会话；模型和思考等级也会保留。
 - **运行中可追加指令**：Agent 执行期间仍继续接收 Telegram 消息；新消息通过 Pi steering 注入当前运行，在当前 assistant turn（含已开始的工具调用）结束后的下一个模型边界读取，而不是等整轮任务结束再排成独立任务。
 - **操作面板**：查看状态、Token 用量、上下文占用、当前工具，切换模型和思考等级，创建新会话、中断任务或一键重启服务。
-- **模型 reasoning 兼容**：针对多种模型家族补充真实可用的思考档位和请求格式，避免面板展示 endpoint 实际不支持的等级。
+- **模型 reasoning 兼容**：针对多种模型家族补充真实可用的思考档位和请求格式，避免面板展示 endpoint 实际不支持的等级。官方 Anthropic 5.5 / Fable 5.1 的 adaptive 请求启用 thinking binding `drop_block`：重启、AGENTS.md 或工具列表改变后，由服务端仅丢弃前缀不匹配的旧思考块，不因签名绑定而整轮 400。非 adaptive 请求仅在出站副本中移除旧思考块；Sonnet 5.5 的 off 模式使用 `between_tools`，Haiku 5.5 保持 `disabled`。不修改持久聊天记录，不影响第三方兼容端点或其他模型。
 - **内置 Web、视觉与邮件能力**：固定依赖并自动加载 `pi-web-access`（提供网页搜索、正文抓取、来源核查、PDF、GitHub 仓库和视频处理）与本地 vendored `pi-email` 扩展（IMAP/SMTP 邮件读取、搜索、发送、回复、转发、移动、删除和标记）；内置 `image-describe` skill（多模态模型原生识图，纯文本模型支持 OpenRouter 视觉降级兜底）。
 - **文件与贴纸**：接收照片、文档和 Telegram 贴纸；可把生成的本地文件发回当前对话。
 - **扩展 UI**：pi 扩展的 `confirm`、`select` 等交互可以映射为 Telegram 内联按钮。
@@ -124,6 +135,7 @@ Telegram Bot API
 - `src/agent/host.ts`：pi SDK 初始化、会话恢复、模型/思考等级和扩展加载。
 - `src/agent/events.ts`：过滤事件角色，并把 pi 事件流转换成 Telegram 中可见的正文、思考和工具状态。
 - `src/agent/reasoning.ts`：模型家族的思考档位与 provider 请求兼容。
+- `src/agent/anthropic-thinking.ts`：官方 Anthropic 思考签名前缀绑定与 Sonnet 5.5 off-mode 请求兼容。
 - `src/agent/audit.ts`：记录不含原始参数和结果的工具审计元数据。
 - `src/agent/outbox.ts`：检查出站文件真实路径、允许根目录和符号链接。
 - `src/telegram/poller.ts`：Telegram 长轮询、私聊/用户限制、冲突恢复和退避。
@@ -305,7 +317,8 @@ journalctl -u pi-tg -f
 - `/status`：打开状态视图，查看模型、思考等级、上下文和运行状态；
 - `/tokens`、`/usage`：查看累计 Token、缓存、成本和上下文占用；
 - `/new`：丢弃当前上下文，创建一个新的专用会话；
-- `/stop`：中断当前 Agent 任务。
+- `/stop`：中断当前 Agent 任务；
+- `/restart`：一键重启 `pi-tg` 服务（会话与模型选择会保留）；
 - `/retry`：仅重发 outbox 中未确认送达的回答分段，不重新运行任务；需等待当前任务结束。
 
 面板还支持：
@@ -400,7 +413,7 @@ npm test
 - 单用户私聊边界与群聊拒绝；
 - 危险配置、配置文件权限、出站符号链接和审计日志明文回归测试；
 - 流式 multipart 文件上传及文件名处理；
-- 模型思考等级与 provider payload 兼容；
+- 模型思考等级与 provider payload 兼容；Anthropic 在系统提示词改变后恢复同一会话、thinking beta Header 合并、流式正文/用量及 off-mode 回归；
 - 状态恢复、滑动空闲超时和操作面板；
 - 内置 `pi-web-access` 加载及四类能力注册；
 - 本地 vendored `pi-email` 扩展加载及 IMAP/SMTP 工具注册，以及离线 MIME/附件/回复线程、密送隐私和文件/URL 访问限制；（`npm run test:email`）
@@ -443,17 +456,29 @@ systemctl restart pi-tg
 PI_TG_CONFIG=/etc/pi-tg/config.json /opt/pi-tg/check-pi-update.sh
 ```
 
-升级前请先备份必要配置、session、state 及交付队列；不要覆盖或删除旧数据后再假设一定能恢复。依赖升级后运行 `npm test` 和 `npm audit --omit=dev`，确认当前任务结束后再重启。v0.1.1 锁定 mailparser 3.9.16，并将 utf7 的 semver 传递依赖覆盖为 5.7.2，以修复已披露漏洞。
+升级前请先备份必要配置、session、state 及交付队列；不要覆盖或删除旧数据后再假设一定能恢复。依赖升级后运行 `npm test` 和 `npm audit --omit=dev`，确认当前任务及最终消息送达结束后再重启。本版邮件依赖为 Mailparser 3.12.4 / Nodemailer 10.2.1，保留 utf7 的 semver 5.7.2 override。
+
+### 已知依赖风险
+
+截至本版发布检查，`npm audit --omit=dev` 仍报告 **4 项** SDK 依赖链问题（1 项 moderate、3 项 high），涉及 SDK 汇总条目以及其嵌套的 undici、brace-expansion、zod。顶层邮件依赖已更新，但这不等于 SDK 内部依赖同步修复。请按实际部署重新审计，另行验证 SDK 升级方案；不要把本文或一次离线测试当作安全保证。
 
 ## 公开 Fork 前的隐私检查
 
-推送自己的 Fork 前至少执行：
+建议在独立、干净的 clone/worktree 中整理公开版本，按文件白名单挑选通用源码；不要直接在生产目录执行 `git add .`。部署专用扩展、模型探针、依赖备份和运行数据应留在仓库之外。
+
+先人工审核文件，再暂存明确要发布的内容，最后执行：
 
 ```bash
-npm run publication-check
+npm test
 git status --short
+git diff --cached --name-status
 git diff --cached --check
+npm run publication-check -- --staged
 ```
+
+默认扫描检查当前工作目录；`--staged` 则只读取 Git 暂存区的实际 blob，即使工作副本随后被修改，也不会把它误当成待提交内容。输出只包含文件位置和规则名，不回显匹配到的密钥。自动扫描不能识别所有个人资料，仍须人工检查完整暂存差异。
+
+发布前还建议使用 Gitleaks 等工具在本机扫描 Git 历史。设置 GitHub 的 `noreply` 提交邮箱，避免在 commit/tag 元数据里暴露私人邮箱。不要把真实配置、聊天历史或扫描原始报告上传到第三方扫描网站。
 
 确认提交中只有 `config.example.json`，没有真实部署数据，尤其不要提交：
 

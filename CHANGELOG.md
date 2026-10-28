@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.4
+
+### Added
+
+- Add `/restart` and publish it in the Telegram command menu. Restarting can interrupt an active task; the existing persistent session and model preferences are restored on startup.
+- Add staged-publication scanning (`npm run publication-check -- --staged`) that reads Git's indexed blobs, plus offline tests for accidentally staged configuration, dirty working copies and secret-free diagnostics.
+- Exclude dependency backups, deployment-only extensions and local live-model probes from publication candidates. Preserve explicit source-file review rather than bulk-staging production directories.
+
+### Changed
+
+- Update Mailparser to 3.12.4 and Nodemailer to 10.2.1, including the vendored extension's declarations. Keep the SDK at 0.84.1 and pi-web-access at 0.18.0; document remaining SDK-chain audit findings rather than claiming a zero-vulnerability release.
+
+### Fixed
+
+- Preserve resumed conversations when official Anthropic 5.5 / Fable 5.1 thinking signatures no longer match the system prompt, tool list or earlier messages. Add the thinking-binding beta and `prefix_mismatch_behavior: "drop_block"` to adaptive requests; leave valid signed blocks unchanged for server-side validation.
+- Do not send adaptive-only binding controls with non-adaptive thinking. Omit historical thinking only from those outgoing requests, retaining persisted history, text and tool calls/results. Translate Sonnet 5.5 off-mode to `between_tools`; keep Haiku 5.5's `disabled` behavior.
+- Fix transient OpenAI TPM/RPM 429 rate-limit errors being misclassified as non-retryable billing failures due to the trailing `/account/billing` help URL, and default `retry.provider.maxRetries` to 3 (up to 60s `retry-after`).
+- Add offline real-SDK restart/streaming regressions with changed AGENTS.md and the same session ID. Scope the compatibility layer to verified models on the official API, leaving other providers and older models untouched.
+
 ## 0.1.3
 
 ### Changed

@@ -193,6 +193,9 @@ function handleUpdate(update: TgUpdate): void {
 	if (text === "/new") {
 		background(dispatcher.reset().then(() => send(msg.chat.id, "🆕 已开新会话。"), () => send(msg.chat.id, "⚠️ 新会话创建失败，请检查服务状态。")), "new failed"); return;
 	}
+	if (text === "/restart") {
+		background(send(msg.chat.id, "♻️ 正在重启服务，当前任务可能被中断。会话与模型选择会保留。").catch(() => undefined).then(() => shutdown("command restart")), "restart failed"); return;
+	}
 	if (text === "/retry") {
 		if (dispatcher.busy) { background(send(msg.chat.id, "请等当前任务结束后再重发。"), "retry busy notice failed"); return; }
 		background(dispatcher.exclusive(async () => {

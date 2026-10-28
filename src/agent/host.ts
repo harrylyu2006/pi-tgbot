@@ -19,6 +19,7 @@ import { errFields, type Logger } from "../log.ts";
 import type { Config } from "../config.ts";
 import type { AgentPreferences } from "../state.ts";
 import { availableLevelsFor, enrichThinkingLevels, preferredDefaultThinkingLevelFor, type ModelLike } from "./reasoning.ts";
+import anthropicThinkingBinding from "./anthropic-thinking.ts";
 
 const BUILTIN_EXTENSIONS = [
 	fileURLToPath(new URL("./web-access.mjs", import.meta.url)),
@@ -109,6 +110,11 @@ export class AgentHost {
 
 		this.pi = await import("@earendil-works/pi-coding-agent");
 		this.settingsManager = this.pi.SettingsManager.create(cfg.cwd, cfg.agentDir);
+		if (this.settingsManager.getProviderRetrySettings?.().maxRetries === undefined) {
+			this.settingsManager.applyOverrides({
+				retry: { provider: { maxRetries: 3, maxRetryDelayMs: 60_000 } },
+			});
+		}
 
 		// noExtensions + an explicit allowlist means @llblab/pi-telegram's module
 		// is never imported. Filtering after discovery would be too late: the
@@ -124,6 +130,7 @@ export class AgentHost {
 			settingsManager: this.settingsManager,
 			noExtensions: true,
 			additionalExtensionPaths: extensionPaths,
+			extensionFactories: [{ name: "anthropic-thinking-binding", factory: anthropicThinkingBinding }],
 			additionalSkillPaths: BUILTIN_SKILLS,
 		});
 		await this.loader.reload();
@@ -216,6 +223,7 @@ export class AgentHost {
 			model: `${session.model.provider}/${session.model.id}`,
 			thinking: session.supportsThinking() ? session.thinkingLevel : "unsupported",
 			thinkingLevels: session.getAvailableThinkingLevels(),
+			anthropicThinkingBinding: "drop_block",
 			activeTools: session.getActiveToolNames(),
 			contextWindow: session.getContextUsage()?.contextWindow,
 		});

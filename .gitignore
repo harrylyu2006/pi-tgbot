@@ -1,5 +1,5 @@
 # Dependencies and build output
-node_modules/
+node_modules*/
 dist/
 coverage/
 *.tsbuildinfo
@@ -36,6 +36,15 @@ audit.jsonl
 *.jsonl
 *.log
 *.pid
+
+# Deployment-only integrations, live probes, and private diagnostics
+/extensions/
+/diagnostics/
+/backups/
+/local/
+/scripts/*-acceptance.mjs
+/scripts/*-probe.mjs
+/scripts/probe-*-config.mjs
 
 # Local backups, screenshots, and temporary files
 *.bak

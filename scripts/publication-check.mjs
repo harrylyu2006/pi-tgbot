@@ -18,13 +18,28 @@ function walk(root = ".", dir = ".") {
   return files;
 }
 
+const staged = process.argv.includes("--staged");
+if (process.argv.slice(2).some((arg) => arg !== "--staged")) {
+  console.error("Usage: publication-check.mjs [--staged]");
+  process.exit(2);
+}
 let files;
 try {
-  files = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], {
+  const args = staged
+    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]
+    : ["ls-files", "-co", "--exclude-standard", "-z"];
+  files = [...new Set(execFileSync("git", args, {
     encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
-  }).split("\0").filter(Boolean);
-} catch {
+  }).split("\0").filter(Boolean))];
+} catch (err) {
+  // Do not silently fall back on ENOBUFS/permission/process errors and miss
+  // what Git will actually publish. Archives without Git can still be checked.
+  if (staged || err.status !== 128) {
+    console.error("Cannot enumerate publication files; scan aborted.");
+    process.exit(2);
+  }
   files = walk();
 }
 
@@ -81,9 +96,13 @@ for (const file of files) {
 
   let text;
   try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    continue; // Binary files are checked by filename; GitHub can scan their history.
+    text = staged
+      ? execFileSync("git", ["show", `:${file}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+      : readFileSync(file, "utf8");
+  } catch (err) {
+    if (!staged && err.code === "ENOENT") continue; // a staged deletion
+    findings.push(`${file}: unreadable or oversized content; manual review required`);
+    continue;
   }
 
   const lines = text.split(/\r?\n/);
