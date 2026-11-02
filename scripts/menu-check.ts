@@ -34,4 +34,11 @@ assert.equal(calls[0].params.scope.type, "all_private_chats"); assert.equal(call
 // Published menu commands must remain handled by the daemon rather than sent to AI.
 const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 for (const c of COMMANDS) assert(main.includes(`"/${c.command}"`), `unhandled advertised command ${c.command}`);
+// The optional plugin's commands are published only when the plugin is configured.
+const { CORE_COMMANDS, SECRET_COMMANDS, KEEPASS_COMMANDS, commandsFor } = await import("../src/telegram/commands.ts");
+const names = (l: Array<{ command: string }>): string => l.map((c) => c.command).join();
+assert.equal(names(commandsFor({ secrets: false, keepass: false })), names(CORE_COMMANDS), "no plugin: core menu only");
+assert.equal(names(commandsFor({ secrets: false, keepass: true })), names(CORE_COMMANDS), "keepass without secrets is not a thing");
+assert.equal(names(commandsFor({ secrets: true, keepass: false })), names([...CORE_COMMANDS, ...SECRET_COMMANDS]), "secrets only: /secret and /secrets");
+assert.equal(names(commandsFor({ secrets: true, keepass: true })), names(COMMANDS), "both: everything");
 console.log("Menu regressions passed: private scope precedence, localized menus, verification, idempotence and command handlers.");

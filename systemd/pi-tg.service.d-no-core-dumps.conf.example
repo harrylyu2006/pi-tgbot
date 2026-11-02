@@ -1,0 +1,5 @@
+# Drop-in for pi-tg.service (copy to /etc/systemd/system/pi-tg.service.d/no-core-dumps.conf, then daemon-reload + restart).
+# pi-tg holds decrypted credentials in memory (vault values, an unlocked KeePass database, the master password while it is
+# being used). A crash must not write them into a core file or an apport report.
+[Service]
+LimitCORE=0

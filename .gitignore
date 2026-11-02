@@ -23,6 +23,15 @@ auth.json
 models.json
 web-search.json
 
+# Secret vault and KeePass data (the optional secrets plugin). Only the fake test databases under scripts/fixtures are publishable.
+vault.json
+vault.json.*
+/vault/
+/keepass/
+*.kdbx
+*.kdbx.*
+!/scripts/fixtures/*.kdbx
+
 # Runtime state, transcripts, logs, and downloaded files
 .pi-subagents/
 sessions/

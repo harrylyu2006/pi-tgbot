@@ -54,9 +54,21 @@ export interface RedactionResult {
 	count: number;
 }
 
+const extraRedactors: Array<(text: string) => string> = [];
+
+/** Register a redactor that knows values the static rules cannot (e.g. the secret vault). */
+export function addOutboundRedactor(fn: (text: string) => string): void {
+	extraRedactors.push(fn);
+}
+
 export function redactOutbound(text: string): RedactionResult {
 	let out = text;
 	let count = 0;
+	for (const fn of extraRedactors) {
+		const before = out;
+		out = fn(out);
+		if (out !== before) count++;
+	}
 	for (const { pattern, replacement } of RULES) {
 		const before = out;
 		out = out.replace(pattern, replacement);

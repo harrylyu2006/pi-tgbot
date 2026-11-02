@@ -30,5 +30,14 @@
     "maxUploadMb": 50,
     "retentionDays": 14
   },
-  "extensions": []
+  "extensions": [],
+  "secrets": {
+    "baseUrl": "https://vault.example.com",
+    "listenPort": 18620,
+    "keepass": {
+      "idleMinutes": 30,
+      "maxEntriesPerSession": 8,
+      "sync": { "remote": "gdrive-ro:Folder/passwords.kdbx", "timeoutSeconds": 30 }
+    }
+  }
 }

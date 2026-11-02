@@ -71,6 +71,8 @@ export interface AgentHostDeps {
 	savePreferences?: (patch: AgentPreferences) => void;
 	/** Extra tools registered alongside the built-ins (e.g. telegram_send_file). */
 	customTools?: unknown[];
+	/** Extra in-process extensions (tools + hooks) that need daemon objects such as the Telegram API. */
+	extensionFactories?: Array<{ name: string; factory: (pi: any) => void | Promise<void> }>;
 	/**
 	 * UI context handed to extensions. Supplying one makes `ctx.hasUI` true, so
 	 * extensions that would otherwise fail closed can ask the operator instead.
@@ -130,7 +132,7 @@ export class AgentHost {
 			settingsManager: this.settingsManager,
 			noExtensions: true,
 			additionalExtensionPaths: extensionPaths,
-			extensionFactories: [{ name: "anthropic-thinking-binding", factory: anthropicThinkingBinding }],
+			extensionFactories: [{ name: "anthropic-thinking-binding", factory: anthropicThinkingBinding }, ...(this.deps.extensionFactories ?? [])],
 			additionalSkillPaths: BUILTIN_SKILLS,
 		});
 		await this.loader.reload();

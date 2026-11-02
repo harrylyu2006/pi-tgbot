@@ -7,8 +7,10 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Level } from "./log.ts";
+import type { SecretsConfig } from "./secrets/service.ts";
+import { REMOTE_RE } from "./secrets/remote.ts";
 
 export interface RenderConfig {
 	/** Minimum ms between editMessageText calls for one message id. */
@@ -71,6 +73,11 @@ export interface Config {
 		maxUploadMb: number;
 		retentionDays: number;
 	};
+	/**
+	 * Encrypted secret input + vault (optional). Absent means the feature is off:
+	 * no listener, no tools, no hooks.
+	 */
+	secrets?: SecretsConfig;
 	coldStart: {
 		/**
 		 * Messages older than this on startup are acknowledged and skipped.
@@ -103,6 +110,13 @@ const DEFAULTS = {
 		retentionDays: 14,
 	},
 };
+
+/** Tools whose arguments leave the box or land on disk; `{{secret:NAME}}` is refused there by default. */
+const DEFAULT_DENY_PLACEHOLDER_TOOLS = [
+	"write", "edit", "email_send", "email_reply", "email_forward", "telegram_ask", "telegram_send_file",
+	"brave_search", "brave_source_check", "brave_fetch", "brave_get_content",
+	"muse_generate_image", "muse_generate_video", "muse_media_status",
+];
 
 class ConfigError extends Error {}
 
@@ -162,7 +176,7 @@ export function loadConfig(path: string): Config {
 		o,
 		[
 			"botToken", "allowedUserId", "cwd", "agentDir", "sessionDir", "model", "logLevel",
-			"render", "tools", "turn", "statePath", "auditPath", "coldStart", "files", "extensions",
+			"render", "tools", "turn", "statePath", "auditPath", "coldStart", "files", "extensions", "secrets",
 		],
 		"",
 	);
@@ -226,6 +240,72 @@ export function loadConfig(path: string): Config {
 			retentionDays: num(filesRaw.retentionDays, DEFAULTS.files.retentionDays, "files.retentionDays"),
 		},
 	};
+
+	if (o.secrets !== undefined) {
+		const sr = object(o.secrets, "secrets");
+		requireKeys(sr, ["baseUrl", "listenHost", "listenPort", "dir", "keyPath", "linkTtlSeconds", "denyPlaceholderTools", "keepass"], "secrets.");
+		let base: URL;
+		try { base = new URL(String(sr.baseUrl)); } catch { throw new ConfigError("secrets.baseUrl must be a URL such as https://vault.example.com"); }
+		const loopback = base.hostname === "127.0.0.1" || base.hostname === "localhost";
+		if (base.protocol !== "https:" && !(base.protocol === "http:" && loopback)) {
+			throw new ConfigError("secrets.baseUrl must be https:// (http only for localhost testing)");
+		}
+		if (base.pathname !== "/" || base.search || base.hash) throw new ConfigError("secrets.baseUrl must be an origin without a path");
+		const host = typeof sr.listenHost === "string" ? sr.listenHost : "127.0.0.1";
+		if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
+			throw new ConfigError("secrets.listenHost must be loopback; put a TLS reverse proxy in front of it");
+		}
+		const port = num(sr.listenPort, 18620, "secrets.listenPort");
+		integerAtLeast(port, 1, "secrets.listenPort");
+		const ttl = num(sr.linkTtlSeconds, 600, "secrets.linkTtlSeconds");
+		if (!Number.isInteger(ttl) || ttl < 60 || ttl > 1800) throw new ConfigError("secrets.linkTtlSeconds must be between 60 and 1800");
+		cfg.secrets = {
+			baseUrl: base.origin, host, port,
+			dir: absolutePath(sr.dir, "/var/lib/pi-tg/vault", "secrets.dir"),
+			keyPath: absolutePath(sr.keyPath, "/etc/pi-tg/vault.key", "secrets.keyPath"),
+			linkTtlSeconds: ttl,
+			denyPlaceholderTools: strArray(sr.denyPlaceholderTools, DEFAULT_DENY_PLACEHOLDER_TOOLS, "secrets.denyPlaceholderTools"),
+			auditPath: join(dirname(cfg.auditPath), "secrets-audit.jsonl"),
+		};
+		if (sr.keepass !== undefined) {
+			const kr = object(sr.keepass, "secrets.keepass");
+			requireKeys(kr, ["path", "mode", "storedSecret", "idleMinutes", "maxHours", "hiddenTag", "confirmTag", "hiddenGroups", "confirmGroups", "maxFileMb", "maxArgonMiB", "maxEntriesPerSession", "sync"], "secrets.keepass.");
+			const mode = kr.mode === undefined ? "session" : kr.mode;
+			if (mode !== "session" && mode !== "stored") throw new ConfigError('secrets.keepass.mode must be "session" or "stored"');
+			const idle = num(kr.idleMinutes, 30, "secrets.keepass.idleMinutes"), maxH = num(kr.maxHours, 8, "secrets.keepass.maxHours");
+			if (!Number.isInteger(idle) || idle < 1 || idle > 1440) throw new ConfigError("secrets.keepass.idleMinutes must be 1-1440");
+			if (!Number.isInteger(maxH) || maxH < 1 || maxH > 72) throw new ConfigError("secrets.keepass.maxHours must be 1-72");
+			const tag = (v: unknown, fallback: string, path: string): string => {
+				const t = v === undefined ? fallback : v;
+				if (typeof t !== "string" || !/^[^,;\s]{1,40}$/.test(t)) throw new ConfigError(`${path} must be a single tag without spaces, commas or semicolons`);
+				return t;
+			};
+			const stored = kr.storedSecret === undefined ? "keepass-master" : kr.storedSecret;
+			if (typeof stored !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(stored)) throw new ConfigError("secrets.keepass.storedSecret must be a valid secret name");
+			const maxMb = num(kr.maxFileMb, 64, "secrets.keepass.maxFileMb");
+			if (!(maxMb > 0 && maxMb <= 256)) throw new ConfigError("secrets.keepass.maxFileMb must be in (0, 256]");
+			const argon = num(kr.maxArgonMiB, 256, "secrets.keepass.maxArgonMiB");
+			if (!Number.isInteger(argon) || argon < 16 || argon > 2048) throw new ConfigError("secrets.keepass.maxArgonMiB must be 16-2048");
+			const budget = num(kr.maxEntriesPerSession, 8, "secrets.keepass.maxEntriesPerSession");
+			if (!Number.isInteger(budget) || budget < 1 || budget > 100) throw new ConfigError("secrets.keepass.maxEntriesPerSession must be 1-100");
+			let sync: { remote: string; timeoutSeconds: number } | undefined;
+			if (kr.sync !== undefined) {
+				const sy = object(kr.sync, "secrets.keepass.sync");
+				requireKeys(sy, ["remote", "timeoutSeconds"], "secrets.keepass.sync.");
+				if (typeof sy.remote !== "string" || !REMOTE_RE.test(sy.remote)) throw new ConfigError('secrets.keepass.sync.remote must be an rclone remote path such as "gdrive-ro:Folder/passwords.kdbx"');
+				const to = num(sy.timeoutSeconds, 30, "secrets.keepass.sync.timeoutSeconds");
+				if (!Number.isInteger(to) || to < 5 || to > 120) throw new ConfigError("secrets.keepass.sync.timeoutSeconds must be 5-120");
+				sync = { remote: sy.remote, timeoutSeconds: to };
+			}
+			cfg.secrets.keepass = {
+				path: absolutePath(kr.path, "/var/lib/pi-tg/keepass/main.kdbx", "secrets.keepass.path"),
+				mode, storedSecret: stored, idleMinutes: idle, maxHours: maxH,
+				hiddenTag: tag(kr.hiddenTag, "pitg-hidden", "secrets.keepass.hiddenTag"), confirmTag: tag(kr.confirmTag, "pitg-confirm", "secrets.keepass.confirmTag"),
+				hiddenGroups: strArray(kr.hiddenGroups, [], "secrets.keepass.hiddenGroups"), confirmGroups: strArray(kr.confirmGroups, [], "secrets.keepass.confirmGroups"),
+				maxFileMb: maxMb, maxArgonMiB: argon, maxEntriesPerSession: budget, ...(sync ? { sync } : {}),
+			};
+		}
+	}
 
 	if (o.model !== undefined) {
 		if (typeof o.model !== "string" || !o.model.includes("/")) {

@@ -59,7 +59,13 @@ const denyNames = [
   /\.deliveries\.json(?:\.tmp)?$/i,
   /\.(?:pem|key|p12|pfx|jks|keystore)$/i,
   /\.bak(?:\.|$)/i,
+  // Secret vault and KeePass databases (and their sidecars/previous generations). Fake fixtures are allowed separately below.
+  /(^|\/)vault\.json(?:\.|$)/i,
+  /\.kdbx?(?:\.|$)/i,
 ];
+
+// The only databases that may be published: fake-data fixtures for the KeePass tests (see scripts/fixtures/README.md).
+const allowedFixtureFiles = /^scripts\/fixtures\/[\w.-]+\.kdbx$/;
 
 const ignoredFiles = new Set(["scripts/publication-check.mjs"]);
 const forbiddenExtensions = /\.(?:jpe?g|png|gif|webp|bmp|tiff?|heic)$/i;
@@ -91,7 +97,7 @@ for (const file of files) {
   if (ignoredFiles.has(file)) continue;
   if (forbiddenExtensions.test(file)) findings.push(`${file}: image assets require explicit privacy review and are forbidden by default`);
   for (const rule of denyNames) {
-    if (rule.test(file)) findings.push(`${file}: forbidden publication filename`);
+    if (rule.test(file) && !(allowedFixtureFiles.test(file) && /\.kdbx$/i.test(file))) findings.push(`${file}: forbidden publication filename`);
   }
 
   let text;

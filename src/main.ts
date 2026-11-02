@@ -1,10 +1,11 @@
 /** Single-operator Telegram daemon. Polling never waits for model work. */
+import { dirname } from "node:path";
 import { loadConfig } from "./config.ts";
 import { createLogger, errFields, setLevel } from "./log.ts";
 import { TgError } from "./errors.ts";
 import { TelegramApi } from "./telegram/api.ts";
 import { Poller } from "./telegram/poller.ts";
-import { COMMANDS } from "./telegram/commands.ts";
+import { commandsFor } from "./telegram/commands.ts";
 import { LiveMessage } from "./telegram/live.ts";
 import { AgentHost } from "./agent/host.ts";
 import { Dispatcher } from "./agent/dispatcher.ts";
@@ -21,6 +22,7 @@ import { TypingIndicator } from "./telegram/typing.ts";
 import { TelegramUI } from "./ui/telegram-ui.ts";
 import { decodeCallback, makeBootId } from "./telegram/keyboard.ts";
 import { renderPanel, type PanelContext } from "./ui/panel.ts";
+import type { SecretsPlugin } from "./secrets/plugin.ts";
 import type { TgUpdate } from "./telegram/types.ts";
 
 const EXIT_CONFIG_FAULT = 78;
@@ -53,6 +55,22 @@ function send(chatId: number, text: string, replyTo?: number): Promise<unknown> 
 }
 const telegramUI: TelegramUI = new TelegramUI({ api, log: log.child("ui"), bootId,
 	currentChatId: () => dispatcher?.currentChatId ?? null, generation: (): number => host.generation });
+/**
+ * Optional plugin: encrypted input page, vault and KeePass access. Its code is imported only when `config.secrets` exists, so
+ * a deployment without it never loads any of it. A failure here must never keep the daemon from answering: the feature
+ * simply stays off and the cause is in the journal.
+ */
+const secretsPlugin: SecretsPlugin | null = await (async () => {
+	if (!config.secrets) return null;
+	try {
+		const { loadSecretsPlugin } = await import("./secrets/plugin.ts");
+		return await loadSecretsPlugin({ config: config.secrets, api, ui: telegramUI, log: log.child("secrets"),
+			operatorChatId: config.allowedUserId, currentChatId: () => dispatcher?.currentChatId ?? null,
+			// Tell the agent a value arrived / KeePass was opened (steers into a running turn, otherwise starts one). Metadata only.
+			notifyAgent: (text, chatId, replyTo) => { if (!shuttingDown) dispatcher?.enqueue({ text, chatId, replyTo }); } });
+	} catch (err) { log.error({ msg: "secrets disabled: plugin failed to load or the vault failed to open", ...errFields(err) }); return null; }
+})();
+const secrets = secretsPlugin?.service ?? null;
 const route = createEventRouter({
 	log: log.child("events"), currentGeneration: () => host.generation,
 	tools: { start: (info) => audit.start({ generation: host.generation, ...info }), end: (info) => audit.end(info) },
@@ -73,9 +91,10 @@ const host: AgentHost = new AgentHost({
 	customTools: [createSendFileTool({ currentChatId: () => dispatcher?.currentChatId ?? null, files, log: log.child("outbox") }),
 		createAskTool({ ui: telegramUI, log: log.child("ask") })],
 	uiContext: telegramUI,
+	extensionFactories: secretsPlugin ? [{ name: "secrets", factory: secretsPlugin.extensionFactory }] : [],
 });
 const poller = new Poller(api, log.child("poll"), {
-	allowedUserId: config.allowedUserId, commands: COMMANDS, onUpdate: handleUpdate, onFatal: (err) => { fatal = err; },
+	allowedUserId: config.allowedUserId, commands: commandsFor({ secrets: secretsPlugin !== null, keepass: secretsPlugin?.hasKeepass === true }), onUpdate: handleUpdate, onFatal: (err) => { fatal = err; },
 });
 const panelCtx: PanelContext = { host, bootId, pollerState: () => poller.state, busy: () => dispatcher.busy,
 	queueDepth: () => dispatcher.queueDepth, uptimeMs: () => Date.now() - bootedAt,
@@ -147,6 +166,8 @@ async function handleAttachment(msg: NonNullable<TgUpdate["message"]>): Promise<
 	let result: { paths: string[]; rejected: string[] };
 	try { result = await files.receive(msg); }
 	catch (err) { log.warn({ msg: "attachment download failed", ...errFields(err) }); result = { paths: [], rejected: ["附件下载失败，请重发。"] }; }
+	// A .kdbx sent to the bot becomes the KeePass database copy and never reaches the model.
+	if (secrets?.keepass && result.paths.length) result = { ...result, paths: await secrets.handleUploads(result.paths, msg.chat.id, msg.message_id) };
 	if (complete) complete(result);
 	else enqueueFiles(msg.chat.id, msg.message_id, caption, result.paths, result.rejected);
 }
@@ -187,6 +208,13 @@ function handleUpdate(update: TgUpdate): void {
 	if (!text) { background(send(msg.chat.id, "这条消息里没有文字也没有附件。"), "empty notice failed"); return; }
 	if (["/start", "/help", "/panel", "/status"].includes(text)) { background(showPanel(msg.chat.id, "status"), "status panel failed"); return; }
 	if (["/tokens", "/usage"].includes(text)) { background(showPanel(msg.chat.id, "tokens"), "tokens panel failed"); return; }
+	if (text === "/secret" || text === "/secrets" || text.startsWith("/secret ") || text.startsWith("/secrets ")
+		|| text === "/unlock" || text.startsWith("/unlock ") || text === "/lock" || text.startsWith("/lock ")) {
+		// Handled here, never forwarded to the model: the operator may be typing a credential by mistake.
+		background(secrets ? secrets.handleCommand(text, msg.chat.id, msg.message_id).then(() => undefined)
+			: send(msg.chat.id, "加密输入功能未启用（config.json 里没有 secrets 段，或保险库打开失败，见 journalctl）。"), "secret command failed");
+		return;
+	}
 	if (text === "/stop") {
 		background(dispatcher.abort(), "abort failed"); background(send(msg.chat.id, "⏹ 已请求中断。"), "stop notice failed"); return;
 	}
@@ -215,6 +243,7 @@ async function shutdown(reason: string): Promise<void> {
 	clearInterval(keepAlive);
 	mediaGroups.close();
 	poller.stop();
+	background(secrets?.stop() ?? Promise.resolve(), "secrets stop failed");
 	// Final outbox/interrupted state survives a forced supervisor timeout.
 	const deadline = setTimeout(() => process.exit(1), 22_000);
 	try { await dispatcher?.shutdown(); await host.stop(); }
@@ -222,6 +251,7 @@ async function shutdown(reason: string): Promise<void> {
 }
 async function main(): Promise<void> {
 	state.load(); deliveries.load(); audit.init(); files.sweep();
+	await secrets?.start().catch((err) => log.error({ msg: "secret input server failed to start; feature unavailable until restart", ...errFields(err) }));
 	await host.start();
 	dispatcher = new Dispatcher({
 		host, log, idleTimeoutMs: config.turn.idleTimeoutMs,
@@ -234,6 +264,7 @@ async function main(): Promise<void> {
 	});
 	await poller.preflight();
 	log.info({ msg: "ready" });
+	if (secrets) background(secrets.startupUnlock(`${dirname(config.statePath)}/unlock-on-start`), "startup unlock failed");
 	const orphan = state.interrupted;
 	if (orphan) {
 		await send(config.allowedUserId, "⚠️ 上一轮在服务重启时被打断，可能已执行部分操作；不会自动重跑任务。").catch(() => undefined);

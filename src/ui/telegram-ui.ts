@@ -65,7 +65,7 @@ export class TelegramUI implements ExtensionUIContext {
 		return { ok: true, label: entry.label };
 	}
 
-	private async ask(title: string, message: string, options: string[], timeoutMs?: number, signal?: AbortSignal): Promise<string | undefined> {
+	private async ask(title: string, message: string, options: string[], timeoutMs?: number, signal?: AbortSignal, maxMessageChars = 1500): Promise<string | undefined> {
 		if (signal?.aborted) return undefined;
 		const chatId = this.deps.currentChatId();
 		if (chatId === null) {
@@ -78,7 +78,7 @@ export class TelegramUI implements ExtensionUIContext {
 			data: encodeCallback("cf", `${id}:${index}`, this.deps.bootId, this.deps.generation()),
 		}));
 
-		const text = `<b>❓ ${esc(title)}</b>\n\n<pre>${esc(message.slice(0, 1500))}</pre>`;
+		const text = `<b>❓ ${esc(title)}</b>\n\n<pre>${esc(message.slice(0, maxMessageChars))}</pre>`;
 		let messageId: number;
 		try {
 			const sent = await this.deps.api.sendMessage({
@@ -134,6 +134,20 @@ export class TelegramUI implements ExtensionUIContext {
 			}
 			return choice;
 		});
+	}
+
+	/**
+	 * Like `confirm`, but the message is shown in full or not at all. Used where the text *is* the thing being approved
+	 * (a command about to run with a credential): a silently shortened dialog would let the tail of it go unreviewed.
+	 */
+	async confirmVerbatim(title: string, message: string): Promise<boolean> {
+		const LIMIT = 3400; // Telegram allows 4096 characters after entity parsing; leave room for the title
+		if (message.length > LIMIT) {
+			this.deps.log.warn({ msg: "verbatim confirm too long, denying", length: message.length });
+			return false;
+		}
+		const choice = await this.ask(title, message, ["✅ 允许", "❌ 拒绝"], undefined, undefined, LIMIT);
+		return choice === "0";
 	}
 
 	async confirm(title: string, message: string): Promise<boolean> {

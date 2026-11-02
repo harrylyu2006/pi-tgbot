@@ -80,6 +80,8 @@ export interface SendMessageParams {
 	reply_to_message_id?: number;
 	link_preview_options?: { is_disabled: boolean };
 	reply_markup?: unknown;
+	/** Blocks forwarding and saving; used for one-time secret links. */
+	protect_content?: boolean;
 }
 
 export interface EditMessageTextParams {
