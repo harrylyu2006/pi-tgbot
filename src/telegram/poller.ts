@@ -17,7 +17,7 @@ import type { TelegramApi } from "./api.ts";
 import type { TgUpdate } from "./types.ts";
 import { syncCommandMenu } from "./menu.ts";
 
-const ALLOWED_UPDATES = ["message", "callback_query"];
+const ALLOWED_UPDATES = ["message", "callback_query", "managed_bot", "message_reaction"];
 // 10s, not 30s. The Telegram path from this box intermittently wedges: the
 // request connects and then never answers, so the only cost that matters is how
 // long we sit blind before giving up and reconnecting. A shorter poll caps that
@@ -145,7 +145,7 @@ export class Poller {
 						msg: "updates received",
 						count: updates.length,
 						kinds: updates.map((u) =>
-							u.message ? "message" : u.callback_query ? "callback" : u.edited_message ? "edited" : "other",
+							u.message ? "message" : u.callback_query ? "callback" : u.message_reaction ? "reaction" : u.edited_message ? "edited" : "other",
 						),
 					});
 				}
@@ -170,6 +170,24 @@ export class Poller {
 	}
 
 	private accept(update: TgUpdate): boolean {
+		// Managed-bot updates have an owner, but no chat/from envelope.
+		if (update.managed_bot) {
+			return update.managed_bot.user.id === this.opts.allowedUserId
+				&& !update.managed_bot.user.is_bot && update.managed_bot.bot.is_bot;
+		}
+		if (update.message_reaction) {
+			const user = update.message_reaction.user;
+			const chat = update.message_reaction.chat;
+			if (!user || user.is_bot || user.id !== this.opts.allowedUserId) {
+				this.log.warn({ msg: "dropping reaction from non-allowlisted user", updateId: update.update_id });
+				return false;
+			}
+			if (!chat || chat.type !== "private" || chat.id !== this.opts.allowedUserId) {
+				this.log.warn({ msg: "dropping reaction outside the operator private chat", updateId: update.update_id });
+				return false;
+			}
+			return true;
+		}
 		const from = update.message?.from ?? update.callback_query?.from;
 		if (!from) {
 			this.log.warn({ msg: "dropping update with no sender", updateId: update.update_id });

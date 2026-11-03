@@ -41,6 +41,7 @@ export class TelegramUI implements ExtensionUIContext {
 	private readonly deps: TelegramUIDeps;
 	private readonly pending = new Map<string, Pending>();
 	private counter = 0;
+	private cancelGeneration = 0;
 	/** TUI styling is meaningless over Telegram, but the interface demands one; nothing ever renders it. */
 	private readonly themeValue = {} as Theme;
 
@@ -50,6 +51,13 @@ export class TelegramUI implements ExtensionUIContext {
 
 	constructor(deps: TelegramUIDeps) {
 		this.deps = deps;
+	}
+
+	/** Fail closed when a fleet task stops; old buttons must never authorize a later task. */
+	cancelAll(): void {
+		this.cancelGeneration++;
+		for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.resolve(undefined); }
+		this.pending.clear();
 	}
 
 	/** Called by the callback router: `arg` is "<id>:<choiceIndex>". */
@@ -67,6 +75,7 @@ export class TelegramUI implements ExtensionUIContext {
 
 	private async ask(title: string, message: string, options: string[], timeoutMs?: number, signal?: AbortSignal, maxMessageChars = 1500): Promise<string | undefined> {
 		if (signal?.aborted) return undefined;
+		const generation = this.cancelGeneration;
 		const chatId = this.deps.currentChatId();
 		if (chatId === null) {
 			this.deps.log.warn({ msg: "ui dialog requested outside a turn, denying", title });
@@ -94,6 +103,9 @@ export class TelegramUI implements ExtensionUIContext {
 			this.deps.log.warn({ msg: "failed to send ui dialog, denying", ...errFields(err) });
 			return undefined;
 		}
+
+		// A cancellation may happen while sendMessage is still in flight.
+		if (generation !== this.cancelGeneration || signal?.aborted) return undefined;
 
 		return new Promise<string | undefined>((resolve) => {
 			let onAbort: (() => void) | undefined;
@@ -150,8 +162,8 @@ export class TelegramUI implements ExtensionUIContext {
 		return choice === "0";
 	}
 
-	async confirm(title: string, message: string): Promise<boolean> {
-		const choice = await this.ask(title, message, ["✅ 允许", "❌ 拒绝"]);
+	async confirm(title: string, message: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<boolean> {
+		const choice = await this.ask(title, message, ["✅ 允许", "❌ 拒绝"], opts?.timeout, opts?.signal);
 		return choice === "0";
 	}
 

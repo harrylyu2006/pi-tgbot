@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { PanelMessage, modelPanel, thinkingPanel, botsPanel, botState, botLink, botDisplayName, navigation, navigationRows, cacheHitRate, usagePanel, statusPanel, toolsPanel, type FleetView } from '../src/fleet/panels.ts';
+import { encodeCallback, decodeCallback } from '../src/telegram/keyboard.ts';
+const calls:any[]=[];
+let error:Error|undefined;
+const api:any={
+ sendMessage:async(p:any)=>{calls.push({method:'send',...p});return {message_id:123};},
+ editMessageText:async(p:any)=>{calls.push({method:'edit',...p});if(error)throw error;return true;},
+};
+const panel=new PanelMessage(api,42,t=>t.replace(/PRIVATE/g,'[redacted]'));
+await panel.update({text:'Home PRIVATE'});
+await panel.update({text:'Models'});
+await panel.update({text:'Page 2'},123);
+assert.equal(calls.filter(c=>c.method==='send').length,1);
+assert.ok(calls.filter(c=>c.method==='edit').every(c=>c.message_id===123));
+assert.ok(!JSON.stringify(calls).includes('PRIVATE'));
+error=new Error('Bad Request: message is not modified');await panel.update({text:'same'});error=undefined;
+const old=panel.begin(),next=panel.begin();await panel.update({text:'old slow result'},123,old);await panel.update({text:'latest'},123,next);
+assert.ok(!calls.some(c=>c.text==='old slow result'));
+error=new Error('request timeout');await assert.rejects(panel.update({text:'timeout'}));assert.equal(calls.filter(c=>c.method==='send').length,1);
+error=new Error('429 Too Many Requests');await assert.rejects(panel.update({text:'limited'}));assert.equal(calls.filter(c=>c.method==='send').length,1);
+error=new Error('Bad Request: message to edit not found');await panel.update({text:'replacement'});error=undefined;assert.equal(calls.filter(c=>c.method==='send').length,2);
+await panel.update({text:'explicit /panel'},null);assert.equal(calls.at(-1).method,'send');
+await panel.update({text:'explicit /start'},null);assert.equal(calls.at(-1).method,'send');
+await panel.update({text:'clicked model button'},123);assert.equal(calls.at(-1).method,'edit');
+assert.equal(calls.filter(c=>c.method==='send').length,4,'each explicit command sends a new panel, callbacks only edit');
+const choices=Array.from({length:12},(_,i)=>({spec:`provider/${i}-`+'long'.repeat(20),levels:['off','high','xhigh']}));
+const cb=(a:string,v='')=>encodeCallback(a,v,'panel123',1);
+const m=modelPanel(choices,choices[10]!.spec,1,cb);
+const buttons=(m.markup as any).inline_keyboard.flat();
+assert.ok(buttons.some((b:any)=>b.text===`✅ ${choices[10]!.spec}`));
+assert.ok(buttons.every((b:any)=>Buffer.byteLength(b.callback_data)<=64));
+const selected=buttons.find((b:any)=>b.text.startsWith('✅ '));assert.equal(decodeCallback(selected.callback_data)?.arg,choices[10]!.spec);
+const t=thinkingPanel(['off','high','xhigh'],'xhigh',cb);assert.ok(JSON.stringify(t).includes('✅ xhigh'));
+const fleet:FleetView={limit:3,active:1,bots:[
+ {id:'master',username:'fixture_master_bot',name:'总控助手',master:true,enabled:true,role:'总控',state:'running',model:'provider/model',thinking:'high',queued:0},
+ {id:'child',username:'fixture_child_bot',name:'研究助手 <验证> & 测试',master:false,enabled:true,role:'研究 <script> & 验证',state:'sleeping',model:'claude/sonnet',thinking:'xhigh',queued:2},
+ {id:'paused',username:'fixture_paused_bot',name:'运维助手',master:false,enabled:false,role:'暂停',state:'paused',queued:0},
+]};
+const dashboard=botsPanel(fleet,0,cb);const links=(dashboard.markup as any).inline_keyboard.flat().filter((b:any)=>b.url);
+assert.ok(dashboard.text.includes('🟩⬜⬜'));assert.ok(dashboard.text.includes('1 / 3'));
+assert.ok(dashboard.text.includes('休眠'));assert.ok(dashboard.text.includes('已暂停'));assert.ok(dashboard.text.includes('等待 2 个任务'));
+assert.ok(dashboard.text.includes('🤖 子助手'));
+assert.ok(!dashboard.text.includes('子 bot')&&!dashboard.text.includes('子机器人'),'use the operator-preferred child-assistant terminology');
+assert.ok(dashboard.text.includes('&lt;script&gt; &amp;'));assert.ok(!dashboard.text.includes('<script>'));
+assert.deepEqual(links.map((l:any)=>l.url),fleet.bots.map(b=>`https://t.me/${b.username}`));
+assert.ok(dashboard.text.includes('<a href="https://t.me/fixture_child_bot">研究助手 &lt;验证&gt; &amp; 测试</a>'));
+assert.ok(links.some((l:any)=>l.text==='💬 打开 研究助手 <验证> & 测试'));
+assert.ok(links.every((l:any)=>!l.text.includes('@fixture_')),'visible buttons use names, not usernames');
+assert.equal(botDisplayName({id:'internal-123',master:false}),'子助手');
+assert.equal(botDisplayName({id:'master',master:true,name:'  '}),'总控');
+assert.equal(botDisplayName({id:'test',name:' 新名字 '}),'新名字');
+assert.ok(!statusPanel(fleet.bots[1]!,null,0,3,cb,3).text.includes('@fixture_child_bot'));
+assert.ok(navigation(cb,true).some(b=>b.text==='🛰 机器人'));assert.ok(!navigation(cb,false).some(b=>b.text==='🛰 机器人'));
+assert.equal(botState({...fleet.bots[1]!,state:'queued'}),'🟡 排队中');
+assert.equal(botState({...fleet.bots[2]!,state:'running'}),'⏹ 停止中');
+assert.equal(botLink('evil\" onclick=\"x'),undefined);assert.equal(botLink('https://evil.test'),undefined);
+const many:FleetView={...fleet,bots:Array.from({length:11},(_,i)=>({...fleet.bots[1]!,id:String(i),username:`fixture_${i}_bot`,role:'测试<&'.repeat(200),model:'long-model'.repeat(60)}))};
+const paged=botsPanel(many,1,cb);assert.ok(paged.text.includes('第 2 / 3 页'));assert.ok(!paged.text.includes('@fixture_0_bot'));
+assert.equal((paged.markup as any).inline_keyboard.flat().filter((b:any)=>b.url).length,4);
+assert.ok(paged.text.length<4096,'bounded dashboard even with long roles/models');
+assert.ok(botsPanel(many,999,cb).text.includes('第 3 / 3 页'));
+assert.ok(botsPanel({...fleet,bots:[],active:0},0,cb).text.includes('尚未登记机器人'));
+const usage={stats:{tokens:{input:200,output:30,cacheRead:800,cacheWrite:100,total:1130},cost:0.1234,userMessages:12,assistantMessages:23,toolCalls:34},context:{tokens:25000,contextWindow:100000,percent:25},sessionId:'session-example',at:1793632104787};
+const up=usagePanel(usage,cb,true);
+assert.equal(cacheHitRate(usage.stats.tokens),80);assert.ok(up.html);
+for(const value of ['本会话累计','缓存命中率：<b>80.0%</b>','缓存读取：<b>800</b>','合计：<b>1,130</b>','当前上下文','25,000 / 100,000','25.00%','$0.1234','工具调用：34'])assert.ok(up.text.includes(value),value);
+assert.ok(!up.text.includes('缓存写入'),'retain operator preference: no cache-write row');
+assert.ok(!/<pre>/.test(up.text)&&!/<code>[^<]* {3,}/.test(up.text),'no padded pseudo-table');
+assert.equal(cacheHitRate({input:100,cacheRead:0}),0);
+assert.ok(usagePanel({stats:{tokens:{input:100,cacheRead:0}}},cb).text.includes('0.0%'));
+assert.equal(cacheHitRate({input:0,cacheRead:0}),null);assert.equal(cacheHitRate({input:NaN,cacheRead:5}),null);assert.equal(cacheHitRate({input:-1,cacheRead:5}),null);assert.equal(cacheHitRate({input:3}),null);
+assert.ok(usagePanel(undefined,cb).text.includes('暂无会话统计'));
+assert.ok(!usagePanel({stats:{tokens:{}}},cb).text.includes('NaN'));
+assert.ok(usagePanel(usage,cb,true,true).text.includes('本轮进行中'));
+assert.ok((up.markup as any).inline_keyboard.every((row:any[])=>row.length<=2));
+assert.equal(navigationRows(cb,true).length,3);
+assert.ok((modelPanel(choices,'unknown',0,cb,true).markup as any).inline_keyboard.every((row:any[])=>row.length<=2));
+const sp=statusPanel(fleet.bots[0]!,usage,1,3,cb,3);assert.ok(sp.text.includes('缓存命中率：80.0%'));assert.ok(sp.text.includes('\n\n<b>职责</b>'));
+const tp=toolsPanel(['bash','brave_search','email_send','mcp','fleet_status'],cb,true);assert.ok(tp.text.includes('<b>文件与执行</b>'));assert.ok(tp.text.includes('• mcp'));assert.ok(tp.text.includes('\n\n'));
+console.log('FLEET PANELS PASSED (including complete usage/cache hit, spacing and two-column navigation): same-message navigation, no extra save messages, unchanged edits, deleted-only fallback, no timeout/429 spam, stale async views dropped, long callbacks, selection checkmarks.');

@@ -187,6 +187,7 @@ export function createSecretsExtension(svc: SecretsService): (pi: ExtensionAPI) 
 				const out = await runWithSecrets({
 					command: params.command, cwd: params.cwd ?? ctx.cwd, env: envVals, files: fileVals,
 					timeoutMs: (params.timeout_seconds ?? 120) * 1000, signal, scrub: svc.scrubText,
+					workerCgroup: (ctx as unknown as { fleetWorkerCgroup?: string }).fleetWorkerCgroup,
 				});
 				const tail = [
 					out.timedOut ? `[timed out after ${params.timeout_seconds ?? 120}s]` : "",

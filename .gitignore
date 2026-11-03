@@ -1,5 +1,5 @@
 # Dependencies and build output
-node_modules*/
+node_modules*
 dist/
 coverage/
 *.tsbuildinfo
@@ -73,3 +73,28 @@ audit.jsonl
 # IDE files
 .idea/
 .vscode/
+
+# Private agent persona/instructions and shared long-term memory (never publish)
+[Aa][Gg][Ee][Nn][Tt][Ss].md
+[Aa][Gg][Ee][Nn][Tt][Ss].*.md
+[Cc][Ll][Aa][Uu][Dd][Ee].md
+[Ss][Yy][Ss][Tt][Ee][Mm].md
+APPEND_SYSTEM.md
+.pi/
+.agents/
+memory/
+memory-history/
+
+# Fleet runtime databases, registries, control spools and sidecars
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+/fleet/
+managed-bots.json
+managed-bots.json.*
+status.json
+control.json
+adopt-managed.json
+resume-master.json
+rclone.conf

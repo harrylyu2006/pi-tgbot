@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FleetStore, Admission } from '../src/fleet/store.ts';
+import { Rpc } from '../src/fleet/ipc.ts';
+import { getEventListeners } from 'node:events';
+import { TelegramUI } from '../src/ui/telegram-ui.ts';
+import { history } from '../src/fleet/history.ts';
+const dir=mkdtempSync(join(tmpdir(),'fleet-check-'));
+try{
+ const s=new FleetStore(join(dir,'f.sqlite'));
+ for(const id of ['a','b','c','d'])s.saveBot({id,username:id,telegramId:100,role:'test',master:id==='a',enabled:true,sessionDir:dir,statePath:join(dir,id)});
+ const a=s.incoming('a',1,'prompt',{text:'one'})!;assert.equal(s.incoming('a',1,'prompt',{}),null);
+ s.incoming('b',1,'prompt',{text:'two'});s.incoming('c',1,'prompt',{});s.incoming('d',1,'prompt',{});s.incoming('a',2,'prompt',{});
+ const budget=new Admission(3);
+ for(let i=0;i<3;i++){const j=budget.next(s.jobs('queued'),()=>true)!;s.setStatus(j.id,'running');}
+ assert.equal(budget.active.size,3);assert.equal(budget.next(s.jobs('queued'),()=>true),undefined);
+ budget.release('a');assert.equal(budget.next(s.jobs('queued'),()=>true)?.bot,'d');
+ assert.equal(s.recover().length,3);assert.equal(s.jobs('interrupted').length,3);
+ s.setStatus(a.id,'delivery_pending');assert.equal(s.jobs('delivery_pending').length,1);s.close();
+ const s2=new FleetStore(join(dir,'f.sqlite'));assert.equal(s2.bots().length,4);assert.equal(s2.seen('b',1),true);s2.close();
+ let left:Rpc,right:Rpc;left=new Rpc(m=>queueMicrotask(()=>void right.receive(m)),async()=>null);right=new Rpc(m=>queueMicrotask(()=>void left.receive(m)),async(op,a,signal)=>{if(op==='echo')return a;if(op==='wait')return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('abort'))));throw new Error('secret');});
+ assert.deepEqual(await left.call('echo',{x:1}),{x:1});await assert.rejects(left.call('bad',{}),/suppressed/);
+ const ac=new AbortController();const wait=left.call('wait',{},ac.signal);ac.abort();await assert.rejects(wait);left.close();right.close();
+ const broken=new Rpc(()=>{throw new Error('disconnected');},async()=>null);
+ const stopped=new AbortController();await assert.rejects(broken.call('x',{},stopped.signal,100));
+ assert.equal(getEventListeners(stopped.signal,'abort').length,0,'transport failure cleans signal listeners');
+ await broken.receive({rpc:'call',id:'x',op:'x',args:{}});broken.close();await assert.rejects(broken.call('x',{}),/closed/);
+ let delivered!:(v:any)=>void;const logger:any={warn(){},info(){}};
+ const ui=new TelegramUI({api:{sendMessage:()=>new Promise(r=>{delivered=r;})} as any,log:logger,bootId:'test',generation:()=>1,currentChatId:()=>1});
+ const approval=ui.confirm('fixture','fixture');ui.cancelAll();delivered({message_id:1});assert.equal(await approval,false,'in-flight approval cannot survive task cancellation');
+ assert.equal(ui.resolve('1:0').ok,false,'late approval button is invalid');
+ const sessions=join(dir,'sessions');mkdirSync(sessions);
+ const rows=[{type:'session',id:'session'}, {type:'message',id:'a',parentId:null,timestamp:'1',message:{role:'user',content:'one'}},{type:'message',id:'b',parentId:'a',timestamp:'2',message:{role:'assistant',content:[{type:'text',text:'abandoned'}]}},{type:'message',id:'c',parentId:'a',timestamp:'3',message:{role:'assistant',content:[{type:'text',text:'active SECRET'},{type:'thinking',thinking:'not shared'}]}}];
+ writeFileSync(join(sessions,'s.jsonl'),rows.map(r=>JSON.stringify(r)).join('\n')+'\n{"partial":');
+ const result=await history(sessions,{},t=>t.replace('SECRET','[redacted]'));assert.deepEqual(result.messages.map((m:any)=>m.id),['a','c']);assert.ok(!JSON.stringify(result).includes('SECRET'));assert.ok(!JSON.stringify(result).includes('not shared'));
+ await assert.rejects(history(sessions,{session:'../s.jsonl'},t=>t));
+ console.log('FLEET CHECK PASSED: durable dedupe, per-bot isolation, global max 3, no same-bot concurrency, crash recovery, IPC cancel/errors, branch-aware bounded history and redaction.');
+}finally{rmSync(dir,{recursive:true,force:true});}

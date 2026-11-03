@@ -1,10 +1,12 @@
 /** Single-operator Telegram daemon. Polling never waits for model work. */
 import { dirname } from "node:path";
+import { existsSync, renameSync } from "node:fs";
 import { loadConfig } from "./config.ts";
 import { createLogger, errFields, setLevel } from "./log.ts";
 import { TgError } from "./errors.ts";
 import { TelegramApi } from "./telegram/api.ts";
 import { Poller } from "./telegram/poller.ts";
+import { ManagedBots } from "./telegram/managed-bots.ts";
 import { commandsFor } from "./telegram/commands.ts";
 import { LiveMessage } from "./telegram/live.ts";
 import { AgentHost } from "./agent/host.ts";
@@ -71,6 +73,13 @@ const secretsPlugin: SecretsPlugin | null = await (async () => {
 	} catch (err) { log.error({ msg: "secrets disabled: plugin failed to load or the vault failed to open", ...errFields(err) }); return null; }
 })();
 const secrets = secretsPlugin?.service ?? null;
+const managedBots = (() => {
+	if (!secrets) return null;
+	try { return new ManagedBots({ api, secrets, operatorId: config.allowedUserId,
+		path: `${dirname(config.statePath)}/managed-bots.json`, log: log.child("managed-bots"),
+		notify: (text, replyTo) => { if (!shuttingDown) dispatcher?.enqueue({ text, chatId: config.allowedUserId, replyTo }); } }); }
+	catch { log.error({ msg: "managed-bot support disabled: could not load registry" }); return null; }
+})();
 const route = createEventRouter({
 	log: log.child("events"), currentGeneration: () => host.generation,
 	tools: { start: (info) => audit.start({ generation: host.generation, ...info }), end: (info) => audit.end(info) },
@@ -194,6 +203,11 @@ function handleUpdate(update: TgUpdate): void {
 	if (state.alreadySeen(update.update_id)) return;
 	state.markSeen(update.update_id);
 	if (update.callback_query) { background(handleCallback(update), "callback failed"); return; }
+	if (update.managed_bot || update.message?.managed_bot_created) {
+		if (managedBots) background(managedBots.handle(update), "managed-bot event failed");
+		else background(send(config.allowedUserId, "托管机器人通知已收到，但加密存储不可用，尚未获取 Token。"), "managed-bot disabled notice failed");
+		return;
+	}
 	const msg = update.message;
 	if (!msg) return;
 	const ageSeconds = Math.floor(Date.now() / 1000) - msg.date;
@@ -208,6 +222,13 @@ function handleUpdate(update: TgUpdate): void {
 	if (!text) { background(send(msg.chat.id, "这条消息里没有文字也没有附件。"), "empty notice failed"); return; }
 	if (["/start", "/help", "/panel", "/status"].includes(text)) { background(showPanel(msg.chat.id, "status"), "status panel failed"); return; }
 	if (["/tokens", "/usage"].includes(text)) { background(showPanel(msg.chat.id, "tokens"), "tokens panel failed"); return; }
+	if (text === "/newbot" || text.startsWith("/newbot ") || text === "/syncbot" || text.startsWith("/syncbot ")) {
+		if (!managedBots) { background(send(msg.chat.id, "托管机器人功能需要可用的加密保险库。"), "managed-bot disabled notice failed"); return; }
+		const work = text.startsWith("/syncbot") ? managedBots.sync(Number(text.split(/\s+/)[1]))
+			: managedBots.request("测试机器人", text.split(/\s+/)[1]);
+		background(work.catch(() => send(msg.chat.id, "请求未完成，请检查 BotFather 管理权限、用户名或机器人 ID；未自动重复创建。")), "managed-bot command failed");
+		return;
+	}
 	if (text === "/secret" || text === "/secrets" || text.startsWith("/secret ") || text.startsWith("/secrets ")
 		|| text === "/unlock" || text.startsWith("/unlock ") || text === "/lock" || text.startsWith("/lock ")) {
 		// Handled here, never forwarded to the model: the operator may be typing a credential by mistake.
@@ -265,6 +286,12 @@ async function main(): Promise<void> {
 	await poller.preflight();
 	log.info({ msg: "ready" });
 	if (secrets) background(secrets.startupUnlock(`${dirname(config.statePath)}/unlock-on-start`), "startup unlock failed");
+	// Explicit local one-shot request, written only after the operator authorizes provisioning.
+	const managedRequestFlag = `${dirname(config.statePath)}/create-test-bot-on-start`;
+	if (managedBots && existsSync(managedRequestFlag)) {
+		renameSync(managedRequestFlag, `${managedRequestFlag}.requested-${Date.now()}`);
+		background(managedBots.request().catch(() => send(config.allowedUserId, "测试机器人的创建按钮未发送成功，可发送 /newbot 重试。")), "managed-bot startup request failed");
+	}
 	const orphan = state.interrupted;
 	if (orphan) {
 		await send(config.allowedUserId, "⚠️ 上一轮在服务重启时被打断，可能已执行部分操作；不会自动重跑任务。").catch(() => undefined);

@@ -2,13 +2,23 @@
 
 把 [pi coding agent](https://github.com/badlogic/pi-mono) 搬进 Telegram 的单用户机器人。
 
-它基于 `@earendil-works/pi-coding-agent` SDK，长期运行一个独立、可恢复的 pi 会话。你可以直接在 Telegram 中发任务、查看模型输出、观察当前工具调用和运行状态，并通过按钮切换模型、调整思考等级、中断任务或创建新会话。
+它基于 `@earendil-works/pi-coding-agent` SDK，支持默认的单 bot 持久会话，以及可选 Fleet 多 bot、按需 worker 模式。你可以直接在 Telegram 中发任务、查看模型输出、观察当前工具调用和运行状态，并通过按钮切换模型、调整思考等级、中断任务或创建新会话。
 
 这个项目的重点是：**让 pi 在 Telegram 中真正可用，而且长任务的运行过程足够直观。** 它不是一个以“安全拦截”为主要功能的项目，也不是沙箱。
 
 ## 未发布：可选插件（加密输入、保险库、KeePass）
 
 - 新增默认关闭的 `secrets` 插件：一次性加密输入页、AES-256-GCM 保险库、`secret_run` 与 `{{secret:名称}}` 占位符、输出擦除，以及只读的 KeePass 接入（可选 Drive 同步）。没配置时不加载任何插件代码，`kdbxweb` 是可选依赖。详见「可选插件」与 CHANGELOG。
+
+## 未发布：Fleet 多 agent 与 Telegram Managed Bots
+
+- 可选入口 `src/fleet/main.ts`：一个常驻网关管理多个 bot，只有有任务时才创建 Agent worker；全局最多 3 个，同 bot 同时只有一个会话写入者。
+- 各窗口独立会话和模型/思考设置，共享工具、认证及长时记忆；空闲面板不调用模型。
+- 总控支持 `/bots`、`/newbot`、`/syncbot` 和确认后的全局 `/restart`；子助手 `/stop` 暂停、`/start` 恢复。
+- 身份与私人化提示词只从部署端 `AGENTS.md` / 私有角色配置加载，公开源码不嵌入操作员人设。发布检查拒绝私人指令、记忆、数据库和运行记录。
+- Fleet 要求 Linux cgroup v2 + systemd delegation，以及 `secrets` 插件。详见 [FLEET.md](FLEET.md) 的安装、迁移、数据边界与测试说明。
+
+Managed Bots 需要先在 BotFather 开启当前 bot 管理其他机器人的能力。`/newbot` 只发原生请求按钮，操作员确认后才创建。Token 通过 `getManagedBotToken` 直接加密存入保险库，不进入模型提示词、普通日志或登记表；登记表位于 `statePath` 同目录的 `managed-bots.json`，权限 0600。在 Fleet 中自动登记并接入网关；单 bot 入口只登记，不启动新 poller。通知丢失时可用 `/syncbot <bot-id>` 恢复，不重复创建。
 
 ## v0.1.4 会话兼容、重启命令与发布隐私检查
 
@@ -78,7 +88,7 @@ npm run menu-sync -- /etc/pi-tg/config.json
 - 上传给模型分析的文本或图片；
 - API 返回的 thinking/reasoning 内容。
 
-**当前版本不会在工具结果进入模型前做统一脱敏。** 这是有意的：很多运维任务要求模型读取真实配置或凭证才能完成。但这也意味着，一旦 Agent 通过 `read`、`bash` 等工具读到了密码、Token、私钥或数据库连接串，这些内容就有可能随下一次模型请求发送给 provider 或中转站。
+**默认入口未启用 secrets 插件时，不会在工具结果进入模型前统一擦除凭据。** 启用插件后会擦除已登记的秘密值，但不保证发现未知凭据、编码变体或私人资料。一旦 Agent 通过 `read`、`bash` 等工具读到了未被保护的密码、Token、私钥或数据库连接串，这些内容仍可能随下一次模型请求发送给 provider 或中转站。
 
 Telegram 出站消息仍有启发式密钥脱敏，但它只保护“模型输出 → Telegram”这一段，**不能阻止数据被发送给模型服务，也不能替代对中转站的信任判断**。
 
@@ -437,7 +447,7 @@ server {
    - **手动发送**：把 `.kdbx` 直接发给 bot。bot 校验签名、原子替换为本机副本（保留一份 `.prev`）、从收件箱删掉，并**删除你发文件的那条消息**，让数据库文件不留在聊天记录里；文件不会交给模型。
    - 两者并用时遵循「新的覆盖旧的」：手动发送的文件，只有 Drive 上的版本在那之后又被修改过才会被替换，不会用旧版本悄悄覆盖你刚发的新文件。
 
-   运维小技巧：重启 bot 之前 `touch /var/lib/pi-tg/unlock-on-start`，重启完成后 bot 会自动同步并把解锁按钮发给你（一次性，用完即删），省得再手动发 `/unlock`。
+   重启后 KeePass 保持锁定，不主动发送解锁提示，也不主动同步 Drive。只有任务确实需要凭据时由 Agent 调用 `keepass_unlock`，或操作员主动发送 `/unlock`，才打开加密解锁页并进行按需同步。旧 `unlock-on-start` 标记会静默清理，不再触发提示。
 
    Drive 授权建议用**只读**范围（`drive.readonly`）单独建一个 rclone 远端，不要复用有写权限的。
 2. **解锁**：发 `/unlock`（或 Agent 调用 `keepass_unlock`）→ 点按钮 → 在一次性加密页输入主密码。输错可重试（5 次后链接作废）。`session` 模式（默认）下主密码**只在内存里用来打开数据库，不写磁盘**；解析完只保留解密后的条目，空闲 30 分钟自动锁定，最长 8 小时必锁，发 `/lock` 立即锁。
@@ -549,7 +559,7 @@ REDIR='<粘贴的网址>' node scripts/gdrive-oauth.ts finish                  #
 - 工具审计不保存原始参数或工具结果，只保留参数字节数和摘要哈希；
 - `publication-check` 检查常见敏感文件名、凭证格式，并默认拒绝图片资产（图片需先人工隐私审查）；
 - 出站文件只能来自配置允许的目录，拒绝符号链接，并采用流式上传避免把整个文件载入内存；
-- 启用「可选插件」后，保险库（`vault.json`，AES-256-GCM）与主密钥文件分开存放，KeePass 数据库副本、来源记录和使用审计都是 600/700 权限，默认被 Git 忽略（`vault.json`、`*.kdbx`、`*.key`），`publication-check` 也会拒绝它们（仅 `scripts/fixtures/` 里的假数据库例外）。
+- 启用「可选插件」后，保险库（`vault.json`，AES-256-GCM）与主密钥文件分开存放，KeePass 数据库副本、来源记录和使用审计都是 600/700 权限，默认被 Git 忽略（`vault.json`、`*.kdbx`、`*.key`），`publication-check` 也会拒绝它们（仅两个已审阅并以 SHA-256 固定的假数据库例外）。
 
 这些机制都是有限的、启发式的：
 
@@ -625,7 +635,7 @@ PI_TG_CONFIG=/etc/pi-tg/config.json /opt/pi-tg/check-pi-update.sh
 
 ### 已知依赖风险
 
-截至本版发布检查，`npm audit --omit=dev` 仍报告 **4 项** SDK 依赖链问题（1 项 moderate、3 项 high），涉及 SDK 汇总条目以及其嵌套的 undici、brace-expansion、zod。顶层邮件依赖已更新，但这不等于 SDK 内部依赖同步修复。请按实际部署重新审计，另行验证 SDK 升级方案；不要把本文或一次离线测试当作安全保证。
+截至本版发布检查，`npm audit --omit=dev` 仍报告 **6 项** SDK 依赖链问题（3 项 moderate、3 项 high），涉及 SDK 汇总条目以及其嵌套的 undici、brace-expansion、zod、glob、minimatch。顶层邮件依赖已更新，但这不等于 SDK 内部依赖同步修复。请按实际部署重新审计，另行验证 SDK 升级方案；不要把本文或一次离线测试当作安全保证。
 
 ## 公开 Fork 前的隐私检查
 
@@ -639,14 +649,19 @@ git status --short
 git diff --cached --name-status
 git diff --cached --check
 npm run publication-check -- --staged
+# 提交后、推送前
+node scripts/publication-check.mjs --tree HEAD
+node scripts/publication-check.mjs --history HEAD
 ```
 
-默认扫描检查当前工作目录；`--staged` 则只读取 Git 暂存区的实际 blob，即使工作副本随后被修改，也不会把它误当成待提交内容。输出只包含文件位置和规则名，不回显匹配到的密钥。自动扫描不能识别所有个人资料，仍须人工检查完整暂存差异。
+默认扫描检查当前工作目录；`--staged` 读取整个 Git 索引的实际 blob，而不只是本次变更，避免漏掉已跟踪的私人文件。`--tree HEAD` 检查指定提交树，`--history HEAD` 检查其全部祖先中的每个唯一文件版本。即使工作副本随后被修改，也不会把它误当成待发布内容。输出只包含文件位置和规则名，不回显匹配到的密钥。自动扫描不能识别所有个人资料，仍须人工检查完整暂存差异。
 
 发布前还建议使用 Gitleaks 等工具在本机扫描 Git 历史。设置 GitHub 的 `noreply` 提交邮箱，避免在 commit/tag 元数据里暴露私人邮箱。不要把真实配置、聊天历史或扫描原始报告上传到第三方扫描网站。
 
 确认提交中只有 `config.example.json`，没有真实部署数据，尤其不要提交：
 
+- 私人 `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` / `SYSTEM.md`、共享记忆和人设提示词；
+- Fleet SQLite 数据库及 WAL/SHM、bot 登记、状态快照、控制文件及记忆备份；
 - Telegram Bot Token、用户 ID 或 chat ID；
 - pi 的 `auth.json`、私有 `models.json` 或 `web-search.json`；
 - 中转站 API Key、自定义 Header 或带凭证的 URL；
@@ -660,7 +675,7 @@ npm run publication-check -- --staged
 
 ## 已知限制
 
-- 只支持一个 Telegram 操作者和一个长期 Agent 会话；
+- 只支持一个 Telegram 操作者；默认入口为一个长期会话，Fleet 可选多个独立窗口，详见 FLEET.md；
 - 只支持 long polling，启动时会移除 webhook；
 - 暂不转写语音消息；
 - 图片以本地文件路径交给 Agent（多模态模型原生支持，纯文本模型可通过内置 `image-describe` skill 进行视觉兜底）；

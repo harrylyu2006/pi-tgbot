@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
 interface BindingModel {
+	provider?: unknown;
 	api?: unknown;
 	id?: unknown;
 	baseUrl?: unknown;
@@ -19,6 +20,62 @@ interface BindingModel {
 
 function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Strip leaked "Thinking Process:\n..." reasoning prefixes from assistant text
+ * blocks in outgoing context when a previous turn had unsigned/cross-model
+ * thinking converted into plain text.
+ */
+export function stripLeakedThinkingPrefix(text: string, hasToolCalls: boolean): string {
+	if (!/^\s*Thinking Process:\s*\n/.test(text)) return text;
+	if (hasToolCalls) return "";
+	const match = /(?:Let's write the reply!\s*|\n(?=[\u4e00-\u9fff]))/.exec(text);
+	if (!match) return "";
+	return text.slice(match.index + match[0].length).trimStart();
+}
+
+/**
+ * Prevent pi-ai's `transformMessages` from converting cross-model `thinking`
+ * blocks into plain assistant `{ type: "text" }` blocks (which causes models
+ * on some compatibility endpoints to imitate the history and write English
+ * "Thinking Process:" directly into visible text replies). Pure transform on
+ * outgoing context only; never mutates the persisted session transcript.
+ */
+export function sanitizeOutgoingContextMessages(messages: unknown, model: BindingModel | undefined): unknown[] | undefined {
+	if (!Array.isArray(messages) || !model) return undefined;
+	let changed = false;
+	const out = messages.flatMap((msg: unknown) => {
+		if (!record(msg) || msg.role !== "assistant" || !Array.isArray(msg.content)) return [msg];
+		const isSameModel =
+			typeof model.provider === "string" &&
+			typeof model.api === "string" &&
+			typeof model.id === "string" &&
+			msg.provider === model.provider &&
+			msg.api === model.api &&
+			msg.model === model.id;
+		const hasToolCalls = msg.content.some((b: unknown) => record(b) && b.type === "toolCall");
+		let msgChanged = false;
+		const content = msg.content.flatMap((block: unknown) => {
+			if (!record(block)) return [block];
+			if (block.type === "thinking" && !isSameModel) {
+				msgChanged = true;
+				return [];
+			}
+			if (block.type === "text" && typeof block.text === "string" && /^\s*Thinking Process:\s*\n/.test(block.text)) {
+				const cleaned = stripLeakedThinkingPrefix(block.text, hasToolCalls);
+				if (cleaned !== block.text) {
+					msgChanged = true;
+					return cleaned ? [{ ...block, text: cleaned }] : [];
+				}
+			}
+			return [block];
+		});
+		if (!msgChanged) return [msg];
+		changed = true;
+		return content.length > 0 ? [{ ...msg, content }] : [];
+	});
+	return changed ? out : undefined;
 }
 
 export function supportsThinkingBinding(model: BindingModel | undefined): boolean {
@@ -97,6 +154,10 @@ export function normalizeTransientRateLimitMessage(errorMessage: unknown): strin
 }
 
 export default function anthropicThinkingBinding(pi: ExtensionAPI): void {
+	pi.on("context", (event, ctx) => {
+		const messages = sanitizeOutgoingContextMessages(event.messages, ctx.model);
+		if (messages) return { messages: messages as typeof event.messages };
+	});
 	pi.on("before_provider_headers", (event, ctx) => {
 		if (supportsThinkingBinding(ctx.model) && ctx.thinkingLevel !== "off") addThinkingBindingHeader(event.headers);
 	});

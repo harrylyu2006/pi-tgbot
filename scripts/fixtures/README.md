@@ -40,3 +40,7 @@ The reference values below were printed by `keepassxc-cli show -s` / `show -t` o
 
 `pykeepass-real.kdbx` has `GitHub` (alice, TOTP otpauth), `Servers/Staging root` (tag `pitg-confirm`, custom field `API Key`), `Bank` (tag
 `pitg-hidden`) and a deleted entry.
+
+## Publication review
+
+The publication checker permits only these two files at their reviewed SHA-256 hashes. Regeneration changes the ciphertext: inspect every synthetic entry/attachment and then update the checker hashes deliberately. Renaming a private database into this directory does not make it publishable.

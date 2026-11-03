@@ -13,7 +13,7 @@
  *    own session directory.
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { errFields, type Logger } from "../log.ts";
 import type { Config } from "../config.ts";
@@ -78,6 +78,12 @@ export interface AgentHostDeps {
 	 * extensions that would otherwise fail closed can ask the operator instead.
 	 */
 	uiContext?: unknown;
+	/** Fleet workers must not persist model controls into the shared settings.json. */
+	ephemeralSettings?: boolean;
+	instructions?: string;
+	sessionFile?: string;
+	wrapTool?: (definition: any) => void;
+	strictModel?: boolean;
 }
 
 export class AgentHost {
@@ -111,7 +117,11 @@ export class AgentHost {
 		mkdirSync(cfg.sessionDir, { recursive: true });
 
 		this.pi = await import("@earendil-works/pi-coding-agent");
-		this.settingsManager = this.pi.SettingsManager.create(cfg.cwd, cfg.agentDir);
+		if (this.deps.ephemeralSettings) {
+			let settings = {};
+			try { settings = JSON.parse(readFileSync(`${cfg.agentDir}/settings.json`, "utf8")); } catch { /* empty defaults */ }
+			this.settingsManager = this.pi.SettingsManager.inMemory(settings);
+		} else this.settingsManager = this.pi.SettingsManager.create(cfg.cwd, cfg.agentDir);
 		if (this.settingsManager.getProviderRetrySettings?.().maxRetries === undefined) {
 			this.settingsManager.applyOverrides({
 				retry: { provider: { maxRetries: 3, maxRetryDelayMs: 60_000 } },
@@ -133,7 +143,8 @@ export class AgentHost {
 			noExtensions: true,
 			additionalExtensionPaths: extensionPaths,
 			extensionFactories: [{ name: "anthropic-thinking-binding", factory: anthropicThinkingBinding }, ...(this.deps.extensionFactories ?? [])],
-			additionalSkillPaths: BUILTIN_SKILLS,
+			additionalSkillPaths: [...BUILTIN_SKILLS, ...(this.deps.ephemeralSettings ? [`${cfg.agentDir}/skills`] : [])],
+			...(this.deps.instructions ? { appendSystemPromptOverride: (base: string[]) => [...base, this.deps.instructions!] } : {}),
 		});
 		await this.loader.reload();
 
@@ -157,13 +168,19 @@ export class AgentHost {
 	 */
 	private async createSession(fresh: boolean): Promise<void> {
 		const cfg = this.deps.config;
+		if (this.deps.wrapTool) for (const extension of this.loader.getExtensions().extensions ?? []) {
+			for (const tool of extension.tools.values()) this.deps.wrapTool(tool.definition);
+		}
 		const sessionManager = fresh
 			? this.pi.SessionManager.create(cfg.cwd, cfg.sessionDir)
-			: this.pi.SessionManager.continueRecent(cfg.cwd, cfg.sessionDir);
+			: this.deps.sessionFile && existsSync(this.deps.sessionFile)
+				? this.pi.SessionManager.open(this.deps.sessionFile, cfg.sessionDir)
+				: this.pi.SessionManager.continueRecent(cfg.cwd, cfg.sessionDir);
 
 		const created = await this.pi.createAgentSession({
 			cwd: cfg.cwd,
 			agentDir: cfg.agentDir,
+			settingsManager: this.settingsManager,
 			resourceLoader: this.loader,
 			sessionManager,
 			excludeTools: cfg.tools.deny,
@@ -180,7 +197,10 @@ export class AgentHost {
 		// both daemon startup and `/new`, so clearing context never resets controls.
 		const preferences = this.deps.loadPreferences?.() ?? {};
 		const wantedModel = preferences.model ?? cfg.model;
-		if (wantedModel) await this.applyModelOverride(session, wantedModel);
+		if (wantedModel) {
+			await this.applyModelOverride(session, wantedModel);
+			if (this.deps.strictModel && `${session.model.provider}/${session.model.id}` !== wantedModel) throw new Error("Requested model unavailable; refusing silent fallback");
+		}
 
 		// The settings.json default model carries no map either; apply the same
 		// keyword inference so the startup model and the panel agree.
@@ -188,6 +208,7 @@ export class AgentHost {
 
 		if (preferences.thinkingLevel) {
 			const restored = this.applyThinkingLevel(session, preferences.thinkingLevel, "restored");
+			if (!restored && this.deps.strictModel && preferences.thinkingLevel !== "off") throw new Error("Requested thinking level unsupported");
 			if (!restored) {
 				const preferredDefault = preferredDefaultThinkingLevelFor(session.model as unknown as ModelLike);
 				if (preferredDefault) this.applyThinkingLevel(session, preferredDefault, "default");

@@ -21,5 +21,13 @@ ok("拒绝其他用户私聊", !accept({ update_id: 2, message: { message_id: 2,
 ok("拒绝操作员在群里的消息", !accept({ update_id: 3, message: { message_id: 3, date: 1, chat: { id: -100123, type: "supergroup" }, from: user, text: "hi" } }));
 ok("拒绝群消息上的 callback", !accept({ update_id: 4, callback_query: { id: "q", from: user, data: "x", message: { message_id: 4, date: 1, chat: { id: -100123, type: "supergroup" } } } }));
 
+const bot = { id: 123456789, is_bot: true, first_name: "managed" };
+ok("接受操作员创建的 managed_bot 通知", accept({ update_id: 5, managed_bot: { user, bot } }));
+ok("拒绝其他人的 managed_bot 通知", !accept({ update_id: 6, managed_bot: { user: { ...user, id: 99 }, bot } }));
+ok("拒绝 bot 冒充所有者", !accept({ update_id: 7, managed_bot: { user: { ...user, is_bot: true }, bot } }));
+ok("接受操作员私聊表情回应", accept({ update_id: 8, message_reaction: { chat: { id: 42, type: "private" }, message_id: 10, user, date: 1, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "❤️" }] } }));
+ok("拒绝其他用户的表情回应", !accept({ update_id: 9, message_reaction: { chat: { id: 99, type: "private" }, message_id: 10, user: { ...user, id: 99 }, date: 1, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "❤️" }] } }));
+ok("拒绝群聊中的表情回应", !accept({ update_id: 10, message_reaction: { chat: { id: -100123, type: "supergroup" }, message_id: 10, user, date: 1, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "❤️" }] } }));
+
 console.log(failures === 0 ? "\nPOLLER CHECK PASSED" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

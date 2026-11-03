@@ -5,6 +5,8 @@ import { join } from "node:path";
 import {
 	addThinkingBindingHeader,
 	normalizeTransientRateLimitMessage,
+	sanitizeOutgoingContextMessages,
+	stripLeakedThinkingPrefix,
 	supportsThinkingBinding,
 	thinkingBindingPayload,
 	THINKING_BINDING_BETA,
@@ -71,6 +73,35 @@ assert(normalizedTpm && !normalizedTpm.includes("/account/billing"));
 assert.equal(isRetryableAssistantError({ role: "assistant", stopReason: "error", errorMessage: normalizedTpm } as never), true);
 const quotaErr = "Rate limit reached: insufficient_quota. Please check your plan and billing details at https://platform.openai.com/account/billing.";
 assert.equal(normalizeTransientRateLimitMessage(quotaErr), undefined);
+
+// Cross-model thinking blocks and leaked "Thinking Process:" prefixes are stripped
+// from outgoing context without mutating the persisted transcript.
+const targetModel = { provider: "fixture-target", api: "anthropic-messages", id: "fixture-model" };
+const mixedHistory = [
+	{ role: "user", content: "hi" },
+	{ role: "assistant", provider: "fixture-source", api: "openai-completions", model: "fixture-model-high", content: [
+		{ type: "thinking", thinking: "Initial English reasoning" },
+		{ type: "text", text: "你好呀" },
+	] },
+	{ role: "assistant", provider: "fixture-target", api: "anthropic-messages", model: "fixture-model", content: [
+		{ type: "text", text: "Thinking Process:\n\n1. Check files\n" },
+		{ type: "thinking", thinking: "[Reasoning redacted]", thinkingSignature: "sig", redacted: true },
+		{ type: "toolCall", id: "call_1", name: "read", arguments: {} },
+	] },
+	{ role: "assistant", provider: "fixture-target", api: "anthropic-messages", model: "fixture-model", content: [
+		{ type: "text", text: "Thinking Process:\n\n1. Analyze:\n   * detail\nLet's write the reply!测试结果已确认。" },
+	] },
+];
+const mixedClone = structuredClone(mixedHistory);
+const sanitized = sanitizeOutgoingContextMessages(mixedHistory, targetModel) as any[];
+assert(sanitized);
+assert.deepEqual(sanitized[1].content, [{ type: "text", text: "你好呀" }]);
+assert.equal(sanitized[2].content.length, 2);
+assert.equal(sanitized[2].content[0].type, "thinking");
+assert.equal(sanitized[2].content[1].type, "toolCall");
+assert.deepEqual(sanitized[3].content, [{ type: "text", text: "测试结果已确认。" }]);
+assert.deepEqual(mixedHistory, mixedClone);
+assert.equal(stripLeakedThinkingPrefix("Normal text", false), "Normal text");
 console.log("✓ scope / header merge / adaptive and non-adaptive payload / transcript immutability / OpenAI TPM retry classification");
 
 // Real AgentHost + SDK request serialization; no Telegram and no external API.

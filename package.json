@@ -15,7 +15,8 @@
     "check-pi-update.sh",
     "tsconfig.json",
     "!**/*.bak",
-    "!**/*.bak.*"
+    "!**/*.bak.*",
+    "FLEET.md"
   ],
   "type": "module",
   "description": "Security-conscious single-operator Telegram daemon for the pi coding agent SDK",
@@ -35,7 +36,7 @@
     "start": "node src/main.ts",
     "probe": "node scripts/probe.ts",
     "check": "tsc --noEmit",
-    "test": "npm run check && npm run test:render && npm run test:delivery && npm run test:regressions && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:session-lifecycle && npm run test:steering && npm run test:idle-watchdog && npm run test:panel && npm run test:poller && npm run test:security && npm run test:upload && npm run test:web-access && npm run test:email && npm run test:skills && npm run test:secrets && npm run test:publication && npm run publication-check",
+    "test": "npm run check && npm run test:render && npm run test:delivery && npm run test:regressions && npm run test:redact && npm run test:ui && npm run test:activity && npm run test:reasoning && npm run test:state && npm run test:session-lifecycle && npm run test:steering && npm run test:idle-watchdog && npm run test:panel && npm run test:poller && npm run test:security && npm run test:upload && npm run test:web-access && npm run test:email && npm run test:skills && npm run test:secrets && npm run test:fleet && npm run test:publication && npm run publication-check",
     "test:render": "node scripts/render-check.ts",
     "test:delivery": "node scripts/live-delivery-check.ts",
     "test:regressions": "node scripts/reliability-check.ts && node scripts/dispatcher-check.ts && node scripts/media-groups-check.ts",
@@ -48,7 +49,8 @@
     "test:steering": "node scripts/steering-check.ts",
     "test:idle-watchdog": "node scripts/idle-watchdog-check.ts",
     "test:panel": "node scripts/panel-check.ts",
-    "test:poller": "node scripts/poller-check.ts && node scripts/menu-check.ts",
+    "test:poller": "node scripts/poller-check.ts && node scripts/menu-check.ts && node scripts/managed-bots-check.ts && node scripts/fleet-check.ts",
+    "test:fleet": "node scripts/fleet-check.ts && node scripts/fleet-panels-check.ts && node scripts/fleet-catalog-check.ts && node scripts/fleet-sdk-check.ts && node scripts/fleet-memory-check.ts",
     "menu-sync": "node scripts/menu-sync.ts",
     "test:security": "node scripts/security-check.ts",
     "test:upload": "node scripts/upload-check.ts",
@@ -57,7 +59,9 @@
     "test:secrets": "node scripts/optional-plugin-check.ts && node scripts/secrets-check.ts && node scripts/secrets-sdk-check.ts && node scripts/approval-check.ts && node scripts/gdrive-oauth-check.ts && node scripts/keepass-check.ts && node scripts/keepass-service-check.ts && node scripts/keepass-sync-check.ts && node scripts/keepass-sdk-check.ts",
     "test:skills": "node scripts/skills-check.ts",
     "test:publication": "node scripts/publication-check.test.mjs",
-    "publication-check": "node scripts/publication-check.mjs"
+    "publication-check": "node scripts/publication-check.mjs",
+    "start:fleet": "node src/fleet/main.ts",
+    "test:fleet:system": "node scripts/fleet-cgroup-check.ts && node scripts/fleet-gateway-check.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",

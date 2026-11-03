@@ -388,16 +388,13 @@ export class SecretsService {
 	}
 
 	/**
-	 * One-shot: if the marker file exists, remove it and put the unlock button in front of the operator. Lets a restart that was
-	 * done on their behalf end with the button instead of with "now send /unlock". Only someone who can write the state directory
-	 * (root) can create the marker, and all it can do is send the operator a link they may ignore.
+	 * KeePass unlock is on demand only. Consume the legacy startup marker silently so old restart
+	 * scripts remain compatible, but never sync Drive, create a link, or notify an Agent at startup.
+	 * Explicit /unlock and keepass_unlock requests still use requestUnlock() unchanged.
 	 */
-	async startupUnlock(flagPath: string): Promise<UnlockResult | null> {
-		if (!this.keepass || !existsSync(flagPath)) return null;
-		try { unlinkSync(flagPath); } catch { return null; } // if it cannot be removed, do not loop on every restart
-		const res = await this.requestUnlock({ chatId: this.deps.operatorChatId, wait: false, origin: "startup", description: "重启完成，按你的要求自动发来" });
-		if (res.kind === "error") void this.deps.api.sendMessage({ chat_id: this.deps.operatorChatId, text: `⚠️ 重启后想自动发 KeePass 解锁链接，但失败了：${res.message}` }).catch(() => undefined);
-		return res;
+	async startupUnlock(flagPath: string): Promise<null> {
+		try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch { /* best-effort legacy cleanup; never prompt */ }
+		return null;
 	}
 
 	static isKeepassRef(ref: string): boolean { return KP_REF.test(ref); }

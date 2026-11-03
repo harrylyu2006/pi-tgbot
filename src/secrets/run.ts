@@ -25,6 +25,8 @@ export interface RunInput {
 	signal?: AbortSignal;
 	/** Applied to the raw capture before truncation so a secret can never be cut in half and slip through. */
 	scrub: (text: string) => string;
+	/** Fleet gateway supplies this trusted cgroup; the shell joins before executing user code. */
+	workerCgroup?: string;
 }
 
 export interface RunOutput {
@@ -56,7 +58,14 @@ export async function runWithSecrets(input: RunInput): Promise<RunOutput> {
 			}
 		}
 		return await new Promise<RunOutput>((resolve) => {
-			const child = spawn("/bin/bash", ["-c", input.command], { cwd: input.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+			if (input.workerCgroup) {
+				env.PI_TG_WORKER_CGROUP = input.workerCgroup;
+				env.PI_TG_WORKER_COMMAND = input.command;
+			}
+			const command = input.workerCgroup
+				? 'printf "%s" "$$" > "$PI_TG_WORKER_CGROUP/cgroup.procs" || exit 125; exec /bin/bash -c "$PI_TG_WORKER_COMMAND"'
+				: input.command;
+			const child = spawn("/bin/bash", ["-c", command], { cwd: input.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
 			let buf = Buffer.alloc(0);
 			let truncatedCapture = false;
 			let timedOut = false, aborted = false, settled = false;

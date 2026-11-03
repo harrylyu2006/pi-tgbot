@@ -187,7 +187,7 @@ section("/unlock 流程里的同步");
 	ok("审计里有 keepass-sync 记录（状态，无文件内容）", /"event":"keepass-sync","status":"updated"/.test(audit) && /"status":"failed"/.test(audit));
 	await svc.stop();
 
-	// 一次性启动标记：重启后直接把解锁按钮发来
+	// Legacy restart markers must no longer prompt or sync: unlock is on demand only.
 	const flag = join(root, "unlock-on-start");
 	const sd = fakeDrive(A, "2026-10-31T22:47:55.567Z");
 	const ss = await mk("s", sd);
@@ -195,13 +195,16 @@ section("/unlock 流程里的同步");
 	ok("没有标记 → 什么都不做", (await ss.startupUnlock(flag)) === null && sent.length === before && sd.calls.length === 0);
 	writeFileSync(flag, "");
 	const su = await ss.startupUnlock(flag);
-	ok("有标记 → 标记被删除，先同步再发出解锁按钮", su?.kind === "pending" && !existsSync(flag) && sent.length === before + 1 && !!sent.at(-1).reply_markup.inline_keyboard[0][0].url && ss.keepass!.fileInfo().exists, JSON.stringify(su));
-	ok("按钮消息说明是重启后自动发来的，且带同步结果", /重启完成，按你的要求自动发来/.test(sent.at(-1).text) && /已从 Drive 同步最新数据库/.test(sent.at(-1).text));
-	ok("再次调用不会重复发（一次性）", (await ss.startupUnlock(flag)) === null && sent.length === before + 1);
+	ok("有旧标记 → 只清理标记，不发送消息、不同步 Drive", su === null && !existsSync(flag) && sent.length === before && sd.calls.length === 0);
+	ok("启动不会安装或解锁密码库", !ss.keepass!.fileInfo().exists && !ss.keepass!.unlocked);
+	ok("反复启动检查也不会提示", (await ss.startupUnlock(flag)) === null && sent.length === before && sd.calls.length === 0);
+	const demand = await ss.requestUnlock({ chatId: 1, wait: false, origin: "agent:test", description: "当前任务需要登录服务器" });
+	ok("实际任务按需请求仍同步并发送解锁按钮", demand.kind === "pending" && sent.length === before + 1 && sd.calls.length > 0 && !!sent.at(-1).reply_markup.inline_keyboard[0][0].url);
+	const afterDemand = sent.length, syncCalls = sd.calls.length;
 	await ss.stop();
 	writeFileSync(flag, "");
 	const down = await ss.startupUnlock(flag);
-	ok("服务没起来时：标记仍被删除（不会每次重启都重试），并给你发一条警告而不是静默", down?.kind === "error" && !existsSync(flag) && /重启后想自动发 KeePass 解锁链接，但失败了/.test(sent.at(-1).text));
+	ok("服务未启动时也只清理旧标记，不额外报错打扰", down === null && !existsSync(flag) && sent.length === afterDemand && sd.calls.length === syncCalls);
 	await svc.stop();
 
 	// 没有本机文件且同步失败 → 明确报错

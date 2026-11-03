@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { memory, memoryPaths } from '../src/fleet/memory.ts';
+import { history } from '../src/fleet/history.ts';
+const dir=mkdtempSync(join(tmpdir(),'fleet-memory-'));
+try{
+ const paths=memoryPaths(join(dir,'agent'),join(dir,'fleet'),join(dir,'memory'));
+ const empty=memory({path:'notes.md'},paths);
+ assert.equal(empty.content,'');
+ const saved=memory({path:'notes.md',revision:empty.revision,content:'first'},paths);
+ assert.ok(saved.saved);assert.equal(memory({path:'notes.md'},paths).content,'first');
+ assert.ok(memory({path:'notes.md',revision:empty.revision,content:'lost update'},paths).conflict);
+ assert.equal(readFileSync(join(paths.root,'notes.md'),'utf8'),'first');
+ assert.equal(readdirSync(paths.backups).length,1);
+ const long='x'.repeat(60000);memory({path:'notes.md',revision:saved.revision,content:long},paths);
+ assert.equal(memory({path:'notes.md'},paths).content,long,'revision never accompanies a truncated editable file');
+ const persona=memory({path:paths.agentsFile},paths);
+ assert.ok(memory({path:paths.agentsFile,revision:persona.revision,content:'local persona'},paths).saved);
+ assert.throws(()=>memory({path:'../outside.md'},paths),/allowed/);
+ assert.throws(()=>memory({path:'plain.txt'},paths),/allowed/);
+ const outside=join(dir,'outside');mkdirSync(outside);
+ symlinkSync(outside,join(paths.root,'alias'));
+ assert.throws(()=>memory({path:'alias/new.md',content:'bad',revision:empty.revision},paths),/Symlinks/);
+ assert.equal(readdirSync(outside).length,0,'a symlink parent cannot redirect a new file outside memory');
+ symlinkSync(join(paths.root,'notes.md'),join(paths.root,'linked.md'));
+ assert.throws(()=>memory({path:'linked.md'},paths),/Symlinks/);
+ const sessions=join(dir,'sessions');mkdirSync(sessions);writeFileSync(join(outside,'s.jsonl'),'');symlinkSync(join(outside,'s.jsonl'),join(sessions,'s.jsonl'));
+ await assert.rejects(history(sessions,{},x=>x),/Symlinks/);
+ console.log('FLEET MEMORY PASSED: configurable paths, complete revision reads, conflict backups, traversal and symlink-parent rejection.');
+}finally{rmSync(dir,{recursive:true,force:true});}

@@ -18,6 +18,9 @@ export interface Callback {
 const SEP = "|";
 const VERSION = "1";
 const longArgs = new Map<string, string>();
+/** Private IPC transfer for ephemeral fleet panel workers. */
+export function exportCallbackArgs(): Array<[string,string]> { return [...longArgs]; }
+export function importCallbackArgs(entries: Array<[string,string]>): void { for (const [k,v] of entries) longArgs.set(k,v); while(longArgs.size>2048)longArgs.delete(longArgs.keys().next().value!); }
 let nextArg = 0;
 
 /** Boot id: distinct per process, short enough to fit the 64-byte budget. */

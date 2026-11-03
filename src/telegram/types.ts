@@ -11,6 +11,8 @@ export interface TgUser {
 	is_bot: boolean;
 	first_name: string;
 	username?: string;
+	/** Returned by getMe for bots authorized to manage other bots. */
+	can_manage_bots?: boolean;
 }
 
 export interface TgChat {
@@ -44,6 +46,7 @@ export interface TgMessage {
 		set_name?: string;
 	};
 	media_group_id?: string;
+	managed_bot_created?: { bot: TgUser };
 }
 
 export interface TgCallbackQuery {
@@ -53,11 +56,29 @@ export interface TgCallbackQuery {
 	message?: TgMessage;
 }
 
+export interface TgReactionType {
+	type: string;
+	emoji?: string;
+	custom_emoji_id?: string;
+}
+
+export interface TgMessageReactionUpdated {
+	chat: TgChat;
+	message_id: number;
+	user?: TgUser;
+	actor_chat?: TgChat;
+	date: number;
+	old_reaction: TgReactionType[];
+	new_reaction: TgReactionType[];
+}
+
 export interface TgUpdate {
 	update_id: number;
 	message?: TgMessage;
 	edited_message?: TgMessage;
 	callback_query?: TgCallbackQuery;
+	managed_bot?: { user: TgUser; bot: TgUser };
+	message_reaction?: TgMessageReactionUpdated;
 }
 
 export interface TgWebhookInfo {
